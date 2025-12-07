@@ -1,6 +1,18 @@
+# Virtual Environment (Crucial: stops the 100MB upload error)
+.venv/
+venv/
+env/
+
+# Environment variables (Keep passwords/API keys safe)
 .env
-   __pycache__/
-   *.pyc
-   .DS_Store
-   screenshots/
-   logs/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Mac System files
+.DS_Store
+
+# Application outputs
+screenshots/
+logs/
