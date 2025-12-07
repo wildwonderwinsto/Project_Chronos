@@ -112,18 +112,64 @@ class BrowserEngine:
                 # STEP 2: Click the "Start" button to reveal the form
                 try:
                     print(f"   🔍 Looking for Start button...")
+                    
+                    # Wait for button to be visible
                     await page.wait_for_selector(
                         FORM_SELECTORS['user_details_button'], 
                         timeout=10000,
                         state='visible'
                     )
+                    
+                    # Additional wait to ensure button is fully interactive
+                    await asyncio.sleep(0.5)
+                    
+                    # Check if button is enabled (not disabled)
+                    is_disabled = await page.evaluate('''
+                        () => {
+                            const btn = document.querySelector('#user_details_button');
+                            return btn ? btn.disabled : true;
+                        }
+                    ''')
+                    
+                    if is_disabled:
+                        print(f"   ⚠️  Button is disabled, waiting for it to enable...")
+                        # Wait up to 5 seconds for button to become enabled
+                        for i in range(10):
+                            await asyncio.sleep(0.5)
+                            is_disabled = await page.evaluate('''
+                                () => {
+                                    const btn = document.querySelector('#user_details_button');
+                                    return btn ? btn.disabled : true;
+                                }
+                            ''')
+                            if not is_disabled:
+                                break
+                    
                     print(f"   🔘 Clicking Start button...")
-                    await page.click(FORM_SELECTORS['user_details_button'])
-                
+                    
+                    # Try multiple click methods
+                    try:
+                        # Method 1: Standard click
+                        await page.click(FORM_SELECTORS['user_details_button'], timeout=5000)
+                    except Exception as e1:
+                        print(f"   ℹ️  Standard click failed, trying JavaScript click...")
+                        try:
+                            # Method 2: JavaScript click (bypasses some overlays)
+                            await page.evaluate('''
+                                () => {
+                                    const btn = document.querySelector('#user_details_button');
+                                    if (btn) btn.click();
+                                }
+                            ''')
+                        except Exception as e2:
+                            print(f"   ℹ️  JS click failed, trying force click...")
+                            # Method 3: Force click (ignores actionability checks)
+                            await page.click(FORM_SELECTORS['user_details_button'], force=True, timeout=5000)
+                    
                     # Wait for form to appear after clicking Start
                     print(f"   ⏳ Waiting for form to load...")
                     await asyncio.sleep(random.uniform(2, 3))
-                
+                    
                     # Verify the first form field appeared
                     await page.wait_for_selector(
                         FORM_SELECTORS['first_name'],
@@ -131,9 +177,42 @@ class BrowserEngine:
                         state='visible'
                     )
                     print(f"   ✅ Form loaded successfully!")
-                
+                    
                 except Exception as e:
                     print(f"   ❌ Failed to open form: {str(e)}")
+                    
+                    # Debug info
+                    print(f"   🔍 Debug: Checking page state...")
+                    
+                    # Check if button exists
+                    button_exists = await page.evaluate('''
+                        () => {
+                            const btn = document.querySelector('#user_details_button');
+                            return btn !== null;
+                        }
+                    ''')
+                    print(f"      - Button exists: {button_exists}")
+                    
+                    # Check if button is visible
+                    if button_exists:
+                        button_visible = await page.evaluate('''
+                            () => {
+                                const btn = document.querySelector('#user_details_button');
+                                const style = window.getComputedStyle(btn);
+                                return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+                            }
+                        ''')
+                        print(f"      - Button visible: {button_visible}")
+                        
+                        # Check if button is disabled
+                        button_disabled = await page.evaluate('''
+                            () => {
+                                const btn = document.querySelector('#user_details_button');
+                                return btn.disabled;
+                            }
+                        ''')
+                        print(f"      - Button disabled: {button_disabled}")
+                    
                     raise  # Re-raise to trigger the outer error handling
                     
                 # --- FORM FILLING LOGIC (Runs only if Start button succeeded) ---
