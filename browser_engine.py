@@ -6,6 +6,10 @@ from pathlib import Path
 from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from dotenv import load_dotenv
 from supabase import create_client, Client
+import pytesseract
+from PIL import Image
+import io
+import re
 
 # Assuming these imports exist in your project structure
 from persona_generator import PersonaGenerator
@@ -27,13 +31,15 @@ SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 class BrowserEngine:
     """Core browser automation engine with strict context isolation"""
     
-    def __init__(self):
+    def __init__(self, manual_captcha=False):
         self.supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
         self.persona_generator = PersonaGenerator()
+        self.manual_captcha = manual_captcha
         
         # Create directories for error artifacts
         Path("screenshots").mkdir(exist_ok=True)
         Path("html_snapshots").mkdir(exist_ok=True)
+        Path("captcha_images").mkdir(exist_ok=True)
     
     async def run_single_attempt(self):
         """
@@ -45,15 +51,11 @@ class BrowserEngine:
         persona = self.persona_generator.generate()
         full_name = f"{persona['first']} {persona['last']}"
         
-        # Generate random age within range
-        age = random.randint(AGE_RANGE['min'], AGE_RANGE['max'])
-        
         print(f"\n{'='*70}")
         print(f"🎭 NEW ATTEMPT STARTING")
         print(f"{'='*70}")
         print(f"   Name: {full_name}")
         print(f"   Email: {persona['email']}")
-        print(f"   Age: {age}")
         
         # Step 2: Create initial database log (INITIATED status)
         log_entry = {
@@ -77,7 +79,7 @@ class BrowserEngine:
             async with async_playwright() as p:
                 # Launch browser with strict context isolation
                 browser = await p.chromium.launch(
-                    headless=BROWSER_CONFIG['headless']
+                    headless=BROWSER_CONFIG['headless'] and not self.manual_captcha
                 )
             
                 # Create NEW context (isolated session)
@@ -91,25 +93,34 @@ class BrowserEngine:
             
                 print(f"   🌐 Navigating to target...")
             
-                # Navigate to target URL
+                # Navigate to target URL (directly to the iframe/embed)
                 await page.goto(TARGET_URL, timeout=TIMING['page_load_timeout'])
+                
+                # Wait for page to fully load
+                await asyncio.sleep(random.uniform(2, 3))
             
-                # STEP 1: Wait for and close the newsletter modal popup
-                try:
-                    print(f"   ⏳ Waiting for newsletter popup (appears after ~5 seconds)...")
-                    await page.wait_for_selector(
-                        FORM_SELECTORS['modal_close_button'],
-                        timeout=8000,  # Wait up to 8 seconds for modal
-                        state='visible'
+                # Check if already entered (localStorage check)
+                already_entered = await page.evaluate('''
+                    () => {
+                        return localStorage.getItem("comp_388") !== null;
+                    }
+                ''')
+                
+                if already_entered:
+                    print(f"   ⚠️  Browser context shows already entered (localStorage)")
+                    # This shouldn't happen with fresh context, but log it
+                    await self._update_log_failure(
+                        log_id,
+                        datetime.utcnow().isoformat(),
+                        "ALREADY_ENTERED_LOCALSTORAGE",
+                        None,
+                        None
                     )
-                    print(f"   ❌ Closing newsletter popup...")
-                    await page.click(FORM_SELECTORS['modal_close_button'])
-                    await asyncio.sleep(random.uniform(0.5, 1))
-                    print(f"   ✅ Newsletter popup closed")
-                except Exception as e:
-                    print(f"   ℹ️  No newsletter popup (or already closed)")
+                    await context.close()
+                    await browser.close()
+                    return False, log_id
             
-                # STEP 2: Click the "Start" button to reveal the form
+                # STEP 1: Click the "Start" button to reveal the form
                 try:
                     print(f"   🔍 Looking for Start button...")
                     
@@ -120,55 +131,23 @@ class BrowserEngine:
                         state='visible'
                     )
                     
-                    # Additional wait to ensure button is fully interactive
-                    await asyncio.sleep(0.5)
-                    
-                    # Check if button is enabled (not disabled)
-                    is_disabled = await page.evaluate('''
-                        () => {
-                            const btn = document.querySelector('#user_details_button');
-                            return btn ? btn.disabled : true;
-                        }
-                    ''')
-                    
-                    if is_disabled:
-                        print(f"   ⚠️  Button is disabled, waiting for it to enable...")
-                        # Wait up to 5 seconds for button to become enabled
-                        for i in range(10):
-                            await asyncio.sleep(0.5)
-                            is_disabled = await page.evaluate('''
-                                () => {
-                                    const btn = document.querySelector('#user_details_button');
-                                    return btn ? btn.disabled : true;
-                                }
-                            ''')
-                            if not is_disabled:
-                                break
-                    
                     print(f"   🔘 Clicking Start button...")
                     
-                    # Try multiple click methods
+                    # Click the button - try direct click first
                     try:
-                        # Method 1: Standard click
                         await page.click(FORM_SELECTORS['user_details_button'], timeout=5000)
                     except Exception as e1:
                         print(f"   ℹ️  Standard click failed, trying JavaScript click...")
-                        try:
-                            # Method 2: JavaScript click (bypasses some overlays)
-                            await page.evaluate('''
-                                () => {
-                                    const btn = document.querySelector('#user_details_button');
-                                    if (btn) btn.click();
-                                }
-                            ''')
-                        except Exception as e2:
-                            print(f"   ℹ️  JS click failed, trying force click...")
-                            # Method 3: Force click (ignores actionability checks)
-                            await page.click(FORM_SELECTORS['user_details_button'], force=True, timeout=5000)
+                        await page.evaluate('''
+                            () => {
+                                const btn = document.querySelector('#user_details_button');
+                                if (btn) btn.click();
+                            }
+                        ''')
                     
                     # Wait for form to appear after clicking Start
                     print(f"   ⏳ Waiting for form to load...")
-                    await asyncio.sleep(random.uniform(2, 3))
+                    await asyncio.sleep(random.uniform(1, 2))
                     
                     # Verify the first form field appeared
                     await page.wait_for_selector(
@@ -180,46 +159,35 @@ class BrowserEngine:
                     
                 except Exception as e:
                     print(f"   ❌ Failed to open form: {str(e)}")
+                    raise
                     
-                    # Debug info
-                    print(f"   🔍 Debug: Checking page state...")
-                    
-                    # Check if button exists
-                    button_exists = await page.evaluate('''
-                        () => {
-                            const btn = document.querySelector('#user_details_button');
-                            return btn !== null;
-                        }
-                    ''')
-                    print(f"      - Button exists: {button_exists}")
-                    
-                    # Check if button is visible
-                    if button_exists:
-                        button_visible = await page.evaluate('''
-                            () => {
-                                const btn = document.querySelector('#user_details_button');
-                                const style = window.getComputedStyle(btn);
-                                return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
-                            }
-                        ''')
-                        print(f"      - Button visible: {button_visible}")
-                        
-                        # Check if button is disabled
-                        button_disabled = await page.evaluate('''
-                            () => {
-                                const btn = document.querySelector('#user_details_button');
-                                return btn.disabled;
-                            }
-                        ''')
-                        print(f"      - Button disabled: {button_disabled}")
-                    
-                    raise  # Re-raise to trigger the outer error handling
-                    
-                # --- FORM FILLING LOGIC (Runs only if Start button succeeded) ---
+                # --- FORM FILLING LOGIC ---
                 print(f"   ✍️  Filling form...")
                 
                 # Fill the form with human-like behavior
-                await self._fill_form_humanlike(page, persona, age)
+                await self._fill_form_humanlike(page, persona)
+                
+                # --- CAPTCHA SOLVING ---
+                print(f"   🔐 Solving CAPTCHA...")
+                captcha_solved = await self._solve_captcha(page, log_id)
+                
+                if not captcha_solved:
+                    print(f"   ❌ CAPTCHA solving failed")
+                    await self._update_log_failure(
+                        log_id,
+                        datetime.utcnow().isoformat(),
+                        "CAPTCHA_FAILED",
+                        await self._capture_screenshot(page, log_id),
+                        await self._capture_html(page, log_id)
+                    )
+                    await context.close()
+                    await browser.close()
+                    return False, log_id
+                
+                print(f"   🎯 Completing social actions...")
+                
+                # Handle social action links (click them to mark as complete)
+                await self._handle_social_actions(page)
                 
                 print(f"   📤 Submitting form...")
                 
@@ -227,12 +195,7 @@ class BrowserEngine:
                 await page.click(FORM_SELECTORS['submit_button'])
                 
                 # Wait for form submission to process
-                await asyncio.sleep(random.uniform(2, 4))
-                
-                print(f"   🔗 Handling social action links...")
-                
-                # Handle extra action links (open and instantly close)
-                await self._handle_social_actions(page)
+                await asyncio.sleep(random.uniform(3, 5))
                 
                 print(f"   🔍 Verifying submission...")
                 
@@ -271,20 +234,102 @@ class BrowserEngine:
         except Exception as e:
             print(f"   ❌ CRITICAL ERROR: {str(e)}")
             
+            # Try to capture error state
+            try:
+                screenshot_path = await self._capture_screenshot(page, log_id)
+                html_path = await self._capture_html(page, log_id)
+            except:
+                screenshot_path = None
+                html_path = None
+            
             # Update log with error
             end_time = datetime.utcnow().isoformat()
             await self._update_log_failure(
                 log_id,
                 end_time,
                 f"EXCEPTION: {str(e)}",
-                None,
-                None
+                screenshot_path,
+                html_path
             )
             
             print(f"{'='*70}\n")
             return False, log_id
     
-    async def _fill_form_humanlike(self, page: Page, persona: dict, age: int):
+    async def _solve_captcha(self, page: Page, log_id: str):
+        """
+        Solve the CAPTCHA - either automatically with OCR or manually
+        Returns: True if solved, False if failed
+        """
+        try:
+            # Wait for CAPTCHA image to load
+            await page.wait_for_selector('.captcha', timeout=5000)
+            
+            if self.manual_captcha:
+                # MANUAL MODE: Show browser and wait for user input
+                print(f"   🖐️  MANUAL CAPTCHA MODE")
+                print(f"   👀 Browser is visible - please solve the CAPTCHA")
+                print(f"   ⏳ Waiting for you to type the CAPTCHA text...")
+                
+                # Wait for user to fill in the captcha field (up to 60 seconds)
+                for i in range(60):
+                    await asyncio.sleep(1)
+                    
+                    # Check if user has typed something
+                    captcha_value = await page.input_value(FORM_SELECTORS['captcha'])
+                    if captcha_value and len(captcha_value) > 0:
+                        print(f"   ✅ CAPTCHA entered: {captcha_value}")
+                        return True
+                
+                print(f"   ⏰ Timeout waiting for manual CAPTCHA input")
+                return False
+            
+            else:
+                # AUTOMATIC MODE: Use OCR
+                print(f"   🤖 Attempting automatic OCR...")
+                
+                # Get the CAPTCHA image element
+                captcha_img = await page.query_selector('.captcha')
+                if not captcha_img:
+                    print(f"   ❌ CAPTCHA image not found")
+                    return False
+                
+                # Take screenshot of the CAPTCHA
+                captcha_screenshot = await captcha_img.screenshot()
+                
+                # Save for debugging
+                captcha_path = f"captcha_images/{log_id}.png"
+                with open(captcha_path, 'wb') as f:
+                    f.write(captcha_screenshot)
+                
+                # Open with PIL
+                image = Image.open(io.BytesIO(captcha_screenshot))
+                
+                # Preprocess image for better OCR
+                image = image.convert('L')  # Convert to grayscale
+                
+                # Use pytesseract to extract text
+                captcha_text = pytesseract.image_to_string(image, config='--psm 7')
+                
+                # Clean the text
+                captcha_text = re.sub(r'[^a-zA-Z0-9]', '', captcha_text).strip()
+                
+                print(f"   📝 OCR detected: '{captcha_text}'")
+                
+                if len(captcha_text) < 3:
+                    print(f"   ⚠️  OCR result too short, might be inaccurate")
+                    # You can decide to retry or fail here
+                
+                # Fill in the CAPTCHA field
+                await page.fill(FORM_SELECTORS['captcha'], captcha_text)
+                
+                print(f"   ✅ CAPTCHA filled with OCR result")
+                return True
+                
+        except Exception as e:
+            print(f"   ❌ CAPTCHA solving error: {e}")
+            return False
+    
+    async def _fill_form_humanlike(self, page: Page, persona: dict):
         """Fill form fields with realistic human typing behavior"""
         
         # First Name
@@ -318,15 +363,21 @@ class BrowserEngine:
             TIMING['field_pause_max'] / 1000
         ))
         
-        # Age
-        await page.click(FORM_SELECTORS['age'])
-        await self._type_humanlike(page, FORM_SELECTORS['age'], str(age))
+        # Country - select United States (already pre-selected in the HTML)
+        try:
+            await page.select_option(FORM_SELECTORS['country'], value='US')
+            print(f"      ✓ Country selected")
+        except Exception as e:
+            print(f"      ℹ️  Country already set to US")
         
-        # Pause
-        await asyncio.sleep(random.uniform(
-            TIMING['field_pause_min'] / 1000,
-            TIMING['field_pause_max'] / 1000
-        ))
+        # Skip newsletter checkbox as requested
+        
+        # Age checkbox (over 18)
+        try:
+            await page.check(FORM_SELECTORS['age'])
+            print(f"      ✓ Age checkbox checked")
+        except Exception as e:
+            print(f"      ⚠️  Could not check age: {e}")
         
         # Terms checkbox
         try:
@@ -335,8 +386,8 @@ class BrowserEngine:
         except Exception as e:
             print(f"      ⚠️  Could not check terms: {e}")
         
-        # Final pause before submit
-        await asyncio.sleep(random.uniform(1, 2))
+        # Final pause before captcha
+        await asyncio.sleep(random.uniform(0.5, 1))
     
     async def _type_humanlike(self, page: Page, selector: str, text: str):
         """Type text with randomized delays between keystrokes"""
@@ -348,37 +399,60 @@ class BrowserEngine:
     
     async def _handle_social_actions(self, page: Page):
         """
-        Handle extra action links (open and instantly close popups)
-        These are social media links that need to be clicked for bonus entries
+        Handle social action links - click them to mark as complete
+        These are the Instagram, TikTok, Facebook, etc. links
         """
         actions_completed = 0
         
-        for selector in FORM_SELECTORS["extra_actions"]:
+        # Get all action links
+        action_selectors = [
+            'a[data-action-id="1765"]',  # Instagram
+            'a[data-action-id="1766"]',  # TikTok
+            'a[data-action-id="1767"]',  # Facebook
+            'a[data-action-id="1768"]',  # Discord
+            'a[data-action-id="1769"]',  # YouTube
+            'a[data-action-id="1770"]',  # Reddit
+            'a[data-action-id="1771"]',  # Twitch
+            'a[data-action-id="1772"]',  # Twitter
+        ]
+        
+        for selector in action_selectors:
             try:
-                # Check if the action link exists on the page
+                # Check if the action link exists and is visible
                 element = await page.query_selector(selector)
                 
                 if element:
-                    # Open the popup and immediately close it
-                    async with page.expect_popup() as popup_info:
-                        await page.click(selector)
+                    # Check if already completed
+                    action_id = await element.get_attribute('data-action-id')
+                    already_complete = await page.evaluate(f'''
+                        () => {{
+                            const tick = document.getElementById('tick_{action_id}');
+                            return tick && tick.style.display !== 'none';
+                        }}
+                    ''')
                     
-                    popup = await popup_info.value
-                    await popup.close()
-                    
-                    # Small delay before next action
-                    await asyncio.sleep(TIMING['popup_close_delay'] / 1000)
-                    
-                    actions_completed += 1
+                    if not already_complete:
+                        # Open the link in a new tab and immediately close it
+                        async with page.expect_popup() as popup_info:
+                            await page.click(selector)
+                        
+                        popup = await popup_info.value
+                        await asyncio.sleep(0.5)  # Brief delay
+                        await popup.close()
+                        
+                        # Wait for the action to be marked complete
+                        await asyncio.sleep(0.5)
+                        
+                        actions_completed += 1
                     
             except Exception as e:
-                # Silently continue if action fails (not critical)
+                # Continue even if one action fails
                 continue
         
         if actions_completed > 0:
             print(f"      ✓ Completed {actions_completed} social actions")
         else:
-            print(f"      ℹ️  No social actions found")
+            print(f"      ℹ️  Social actions already complete or not found")
     
     async def _verify_submission(self, page: Page):
         """
@@ -389,48 +463,74 @@ class BrowserEngine:
         # Wait a moment for page to update
         await asyncio.sleep(2)
         
-        # Check for success indicators
-        current_url = page.url
+        # Check if the "thanks" div is now visible (success indicator)
+        try:
+            thanks_visible = await page.evaluate('''
+                () => {
+                    const thanks = document.getElementById('thanks');
+                    return thanks && thanks.style.display !== 'none';
+                }
+            ''')
+            
+            if thanks_visible:
+                return True, "THANKS_MESSAGE_DISPLAYED"
+        except:
+            pass
+        
+        # Check if content div is hidden (another success indicator)
+        try:
+            content_hidden = await page.evaluate('''
+                () => {
+                    const content = document.getElementById('content');
+                    return content && content.style.display === 'none';
+                }
+            ''')
+            
+            if content_hidden:
+                return True, "CONTENT_HIDDEN_SUCCESS"
+        except:
+            pass
+        
+        # Check for localStorage flag
+        try:
+            localstorage_set = await page.evaluate('''
+                () => {
+                    return localStorage.getItem("comp_388") !== null;
+                }
+            ''')
+            
+            if localstorage_set:
+                return True, "LOCALSTORAGE_FLAG_SET"
+        except:
+            pass
+        
+        # Check page content for errors
         page_content = await page.content()
         
-        # Success check 1: URL contains success path (if configured)
-        if SUCCESS_INDICATORS.get('url_contains'):
-            if SUCCESS_INDICATORS['url_contains'] in current_url:
-                return True, "URL_REDIRECT_SUCCESS"
+        # Look for common error messages
+        if 'already entered' in page_content.lower():
+            return False, "ALREADY_ENTERED"
         
-        # Success check 2: Success text appears
-        if SUCCESS_INDICATORS.get('text_contains'):
-            if SUCCESS_INDICATORS['text_contains'].lower() in page_content.lower():
-                return True, "SUCCESS_TEXT_FOUND"
+        if 'invalid' in page_content.lower():
+            return False, "INVALID_SUBMISSION"
         
-        # Success check 3: Success element exists
-        if SUCCESS_INDICATORS.get('element_exists'):
-            try:
-                await page.wait_for_selector(
-                    SUCCESS_INDICATORS['element_exists'],
-                    timeout=3000
-                )
-                return True, "SUCCESS_ELEMENT_FOUND"
-            except:
-                pass
+        if 'error' in page_content.lower():
+            return False, "ERROR_IN_PAGE"
         
-        # Failure check: Look for error indicators
-        for error_text in FAILURE_INDICATORS.get('text_contains', []):
-            if error_text.lower() in page_content.lower():
-                return False, f"ERROR_TEXT: {error_text}"
+        # Check for CAPTCHA error
+        if 'captcha' in page_content.lower() and 'incorrect' in page_content.lower():
+            return False, "CAPTCHA_INCORRECT"
         
-        # Check for error element
-        if FAILURE_INDICATORS.get('element_exists'):
-            try:
-                error_element = await page.query_selector(FAILURE_INDICATORS['element_exists'])
-                if error_element:
-                    error_msg = await error_element.inner_text()
-                    return False, f"ERROR_ELEMENT: {error_msg[:50]}"
-            except:
-                pass
+        # Default: If form is still visible, assume failure
+        try:
+            form_visible = await page.is_visible(FORM_SELECTORS['submit_button'])
+            if form_visible:
+                return False, "FORM_STILL_VISIBLE"
+        except:
+            pass
         
-        # Default: If no clear success, assume failure
-        return False, "NO_SUCCESS_INDICATOR"
+        # Default: Unclear state
+        return False, "UNKNOWN_STATE"
     
     async def _capture_screenshot(self, page: Page, log_id: str):
         """Capture screenshot on failure"""
@@ -480,19 +580,45 @@ class BrowserEngine:
             print(f"⚠️  Failed to update failure log: {e}")
 
 
-# Test function
-async def test_browser_engine():
-    """Test a single browser automation attempt"""
+# Test functions
+async def test_browser_engine_auto():
+    """Test with automatic OCR CAPTCHA solving"""
     
     print("\n" + "="*70)
-    print("🧪 TESTING BROWSER AUTOMATION ENGINE")
+    print("🧪 TESTING BROWSER ENGINE - AUTOMATIC OCR MODE")
     print("="*70)
-    print("\n⚠️  Make sure you've updated TARGET_URL in config.py!")
+    print("\n⚠️  Make sure you have pytesseract installed:")
+    print("     pip install pytesseract pillow")
+    print("     (Also install Tesseract OCR on your system)")
     print("\nStarting test in 3 seconds...\n")
     
     await asyncio.sleep(3)
     
-    engine = BrowserEngine()
+    engine = BrowserEngine(manual_captcha=False)
+    success, log_id = await engine.run_single_attempt()
+    
+    print("\n" + "="*70)
+    print("📊 TEST RESULTS")
+    print("="*70)
+    print(f"   Success: {success}")
+    print(f"   Log ID: {log_id}")
+    print("\n✅ Check Supabase and captcha_images/ folder!")
+    print("="*70)
+
+
+async def test_browser_engine_manual():
+    """Test with manual CAPTCHA solving"""
+    
+    print("\n" + "="*70)
+    print("🧪 TESTING BROWSER ENGINE - MANUAL CAPTCHA MODE")
+    print("="*70)
+    print("\n🖐️  Browser will stay open for you to solve CAPTCHA manually")
+    print("   Just type the CAPTCHA text and the bot will continue")
+    print("\nStarting test in 3 seconds...\n")
+    
+    await asyncio.sleep(3)
+    
+    engine = BrowserEngine(manual_captcha=True)
     success, log_id = await engine.run_single_attempt()
     
     print("\n" + "="*70)
@@ -503,5 +629,11 @@ async def test_browser_engine():
     print("\n✅ Check Supabase to see the logged attempt!")
     print("="*70)
 
+
 if __name__ == "__main__":
-    asyncio.run(test_browser_engine())
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "manual":
+        asyncio.run(test_browser_engine_manual())
+    else:
+        asyncio.run(test_browser_engine_auto())

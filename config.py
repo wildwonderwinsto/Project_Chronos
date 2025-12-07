@@ -2,36 +2,19 @@
 Configuration file for Project Chronos
 """
 
-# ===== TARGET WEBSITE CONFIGURATION =====
-TARGET_URL = "https://www.originpc.com/landing/2025/winter-white-arachnid-giveaway/#enter"  # ← UPDATE THIS WITH YOUR REAL URL
+TARGET_URL = "https://prod-giveaways.corsair.com/compo/embed/388/"
 
-# Form field selectors
 FORM_SELECTORS = {
-    # Modal popup that appears first (close it)
-    "modal_close_button": "#newsletterModal > div > div > div.modal-header.border-0.pb-0 > button",
-    
-    # User details button (initial click to reveal form)
-    "user_details_button": "#user_details_button",
-    
-    # Required fields
-    "first_name": "#id_first_name",
-    "last_name": "#id_last_name",
-    "email": "#id_email",
-    "age": "#id_age",
-    "terms": "#id_terms",
-    "submit_button": "#submit_button",
-    
-    # Extra social actions (open + close immediately)
-    "extra_actions": [
-        "#action_1765",
-        "#action_1766",
-        "#action_1767",
-        "#action_1768",
-        "#action_1769",
-        "#action_1770",
-        "#action_1771",
-        "#action_1772",
-    ]
+    'user_details_button': '#user_details_button',
+    'first_name': '#id_first_name',
+    'last_name': '#id_last_name',
+    'email': '#id_email',
+    'country': '#id_country',
+    'newsletter': '#id_newsletter',
+    'captcha': '#id_captcha_1',
+    'age': '#id_age',
+    'terms': '#id_terms',
+    'submit_button': '#submit_button'
 }
 
 # Success detection
