@@ -6,27 +6,17 @@ from datetime import datetime, timedelta
 
 
 class ProxyManager:
-    """Manages free proxy scraping, validation, and rotation - US ONLY"""
+    """Enhanced proxy manager with multiple sources - US ONLY"""
     
     def __init__(self, us_only=True):
         self.proxy_list: List[Dict] = []
         self.used_proxies: set = set()
         self.last_refresh = None
         self.refresh_interval = timedelta(minutes=30)
-        self.us_only = us_only  # Enforce US-only proxies
+        self.us_only = us_only
     
     async def get_proxy(self) -> Optional[Dict]:
-        """
-        Get a fresh, unused US proxy with geographic info
-        Returns: {
-            'server': 'http://ip:port',
-            'ip': '1.2.3.4',
-            'port': '8080',
-            'country': 'US',
-            'city': 'New York',
-            'timezone': 'America/New_York'
-        }
-        """
+        """Get a fresh, unused US proxy with geographic info"""
         
         # Refresh proxy list if needed
         if self._needs_refresh():
@@ -51,7 +41,7 @@ class ProxyManager:
         # Pick random US proxy
         proxy = random.choice(available)
         
-        # Mark as used (1-Entry-Per-IP policy)
+        # Mark as used
         self.used_proxies.add(proxy['server'])
         
         # Fetch geographic info
@@ -70,27 +60,46 @@ class ProxyManager:
         if datetime.now() - self.last_refresh > self.refresh_interval:
             return True
         
-        # Check if we have enough US proxies
         us_proxies = [p for p in self.proxy_list if p['country'] == 'US']
-        if len(us_proxies) < 5:
+        if len(us_proxies) < 10:
             return True
         
         return False
     
     async def _refresh_proxy_list(self):
-        """Scrape and validate US proxies only"""
+        """Scrape proxies from MULTIPLE sources"""
         print(f"   🔄 Refreshing US proxy list...")
         
         new_proxies = []
         
-        # Source 1: US Proxies (primary source)
-        new_proxies.extend(await self._scrape_us_proxies())
+        # Source 1: US-Proxy.org (PRIMARY - Best for US)
+        new_proxies.extend(await self._scrape_us_proxy_org())
         
-        # Source 2: Free Proxy List (filter for US)
+        # Source 2: Free-Proxy-List.net
         new_proxies.extend(await self._scrape_free_proxy_list())
         
-        # Source 3: SSL Proxies (filter for US)
+        # Source 3: SSL-Proxies.org
         new_proxies.extend(await self._scrape_ssl_proxies())
+        
+        # Source 4: Proxy-List.download (NEW)
+        new_proxies.extend(await self._scrape_proxy_list_download())
+        
+        # Source 5: GeoNode (NEW - Good quality)
+        new_proxies.extend(await self._scrape_geonode())
+        
+        # Source 6: ProxyScrape (NEW - Large list)
+        new_proxies.extend(await self._scrape_proxyscrape())
+        
+        # Source 7: GitHub Proxy Lists (NEW - Community maintained)
+        new_proxies.extend(await self._scrape_github_proxies())
+        
+        # Remove duplicates
+        unique_proxies = {}
+        for p in new_proxies:
+            if p['server'] not in unique_proxies:
+                unique_proxies[p['server']] = p
+        
+        new_proxies = list(unique_proxies.values())
         
         # Filter to US only
         us_proxies = [p for p in new_proxies if p['country'] == 'US']
@@ -99,98 +108,13 @@ class ProxyManager:
             print(f"   ✅ Found {len(us_proxies)} US proxies")
             self.proxy_list = us_proxies
             self.last_refresh = datetime.now()
-            self.used_proxies.clear()  # Reset used proxies on refresh
+            self.used_proxies.clear()
         else:
             print(f"   ⚠️  No US proxies found!")
-            # Keep old list if we had US proxies before
-            if not self.proxy_list:
-                print(f"   ⚠️  Will attempt direct connection (no proxy)")
     
-    async def _scrape_free_proxy_list(self) -> List[Dict]:
-        """Scrape from free-proxy-list.net - US ONLY"""
+    async def _scrape_us_proxy_org(self) -> List[Dict]:
+        """US-Proxy.org - PRIMARY SOURCE"""
         proxies = []
-        
-        try:
-            from bs4 import BeautifulSoup
-            
-            url = "https://free-proxy-list.net/"
-            response = requests.get(url, timeout=10)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                table = soup.find('table', {'class': 'table'})
-                
-                if table:
-                    rows = table.find_all('tr')[1:]  # Skip header
-                    
-                    for row in rows[:50]:  # Check more rows
-                        cols = row.find_all('td')
-                        if len(cols) >= 7:
-                            ip = cols[0].text.strip()
-                            port = cols[1].text.strip()
-                            country = cols[3].text.strip()
-                            https = cols[6].text.strip()
-                            
-                            # Only US proxies with HTTPS
-                            if country == 'US' and https == 'yes':
-                                proxies.append({
-                                    'server': f'http://{ip}:{port}',
-                                    'ip': ip,
-                                    'port': port,
-                                    'country': 'US',
-                                    'city': None,
-                                    'timezone': None
-                                })
-        
-        except Exception as e:
-            print(f"      ⚠️  Free-proxy-list scrape failed: {str(e)[:50]}")
-        
-        return proxies
-    
-    async def _scrape_ssl_proxies(self) -> List[Dict]:
-        """Scrape from sslproxies.org - US ONLY"""
-        proxies = []
-        
-        try:
-            from bs4 import BeautifulSoup
-            
-            url = "https://www.sslproxies.org/"
-            response = requests.get(url, timeout=10)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                table = soup.find('table', {'class': 'table'})
-                
-                if table:
-                    rows = table.find_all('tr')[1:]
-                    
-                    for row in rows[:50]:  # Check more rows
-                        cols = row.find_all('td')
-                        if len(cols) >= 4:
-                            ip = cols[0].text.strip()
-                            port = cols[1].text.strip()
-                            country = cols[3].text.strip()
-                            
-                            # Only US proxies
-                            if country == 'US':
-                                proxies.append({
-                                    'server': f'http://{ip}:{port}',
-                                    'ip': ip,
-                                    'port': port,
-                                    'country': 'US',
-                                    'city': None,
-                                    'timezone': None
-                                })
-        
-        except Exception as e:
-            print(f"      ⚠️  SSL-proxies scrape failed: {str(e)[:50]}")
-        
-        return proxies
-    
-    async def _scrape_us_proxies(self) -> List[Dict]:
-        """Scrape US proxies from us-proxy.org - PRIMARY SOURCE"""
-        proxies = []
-        
         try:
             from bs4 import BeautifulSoup
             
@@ -203,15 +127,13 @@ class ProxyManager:
                 
                 if table:
                     rows = table.find_all('tr')[1:]
-                    
-                    for row in rows[:100]:  # Get all available US proxies
+                    for row in rows[:100]:
                         cols = row.find_all('td')
                         if len(cols) >= 7:
                             ip = cols[0].text.strip()
                             port = cols[1].text.strip()
                             https = cols[6].text.strip()
                             
-                            # All proxies from us-proxy.org are US-based
                             if https == 'yes':
                                 proxies.append({
                                     'server': f'http://{ip}:{port}',
@@ -221,16 +143,210 @@ class ProxyManager:
                                     'city': None,
                                     'timezone': None
                                 })
-        
         except Exception as e:
-            print(f"      ⚠️  US-proxy scrape failed: {str(e)[:50]}")
+            print(f"      ⚠️  us-proxy.org failed: {str(e)[:40]}")
         
         return proxies
     
-    async def _enrich_proxy_info(self, proxy: Dict):
-        """Fetch geographic info and timezone for US proxy IP"""
+    async def _scrape_free_proxy_list(self) -> List[Dict]:
+        """Free-Proxy-List.net"""
+        proxies = []
         try:
-            # Use ip-api.com to get location info
+            from bs4 import BeautifulSoup
+            
+            url = "https://free-proxy-list.net/"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                table = soup.find('table', {'class': 'table'})
+                
+                if table:
+                    rows = table.find_all('tr')[1:]
+                    for row in rows[:100]:
+                        cols = row.find_all('td')
+                        if len(cols) >= 7:
+                            ip = cols[0].text.strip()
+                            port = cols[1].text.strip()
+                            country = cols[3].text.strip()
+                            https = cols[6].text.strip()
+                            
+                            if country == 'US' and https == 'yes':
+                                proxies.append({
+                                    'server': f'http://{ip}:{port}',
+                                    'ip': ip,
+                                    'port': port,
+                                    'country': 'US',
+                                    'city': None,
+                                    'timezone': None
+                                })
+        except Exception as e:
+            print(f"      ⚠️  free-proxy-list failed: {str(e)[:40]}")
+        
+        return proxies
+    
+    async def _scrape_ssl_proxies(self) -> List[Dict]:
+        """SSL-Proxies.org"""
+        proxies = []
+        try:
+            from bs4 import BeautifulSoup
+            
+            url = "https://www.sslproxies.org/"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                table = soup.find('table', {'class': 'table'})
+                
+                if table:
+                    rows = table.find_all('tr')[1:]
+                    for row in rows[:100]:
+                        cols = row.find_all('td')
+                        if len(cols) >= 4:
+                            ip = cols[0].text.strip()
+                            port = cols[1].text.strip()
+                            country = cols[3].text.strip()
+                            
+                            if country == 'US':
+                                proxies.append({
+                                    'server': f'http://{ip}:{port}',
+                                    'ip': ip,
+                                    'port': port,
+                                    'country': 'US',
+                                    'city': None,
+                                    'timezone': None
+                                })
+        except Exception as e:
+            print(f"      ⚠️  sslproxies failed: {str(e)[:40]}")
+        
+        return proxies
+    
+    async def _scrape_proxy_list_download(self) -> List[Dict]:
+        """Proxy-List.download - NEW SOURCE"""
+        proxies = []
+        try:
+            # They have direct txt files
+            url = "https://www.proxy-list.download/api/v1/get?type=https&country=US"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                lines = response.text.strip().split('\n')
+                for line in lines[:200]:
+                    if ':' in line:
+                        ip, port = line.strip().split(':')
+                        proxies.append({
+                            'server': f'http://{ip}:{port}',
+                            'ip': ip,
+                            'port': port,
+                            'country': 'US',
+                            'city': None,
+                            'timezone': None
+                        })
+        except Exception as e:
+            print(f"      ⚠️  proxy-list.download failed: {str(e)[:40]}")
+        
+        return proxies
+    
+    async def _scrape_geonode(self) -> List[Dict]:
+        """GeoNode - NEW SOURCE (Good quality)"""
+        proxies = []
+        try:
+            # GeoNode has a nice API
+            url = "https://proxylist.geonode.com/api/proxy-list?limit=200&page=1&sort_by=lastChecked&sort_type=desc&country=US&protocols=http%2Chttps"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                for proxy in data.get('data', []):
+                    ip = proxy.get('ip')
+                    port = proxy.get('port')
+                    if ip and port:
+                        proxies.append({
+                            'server': f'http://{ip}:{port}',
+                            'ip': ip,
+                            'port': str(port),
+                            'country': 'US',
+                            'city': proxy.get('city'),
+                            'timezone': None
+                        })
+        except Exception as e:
+            print(f"      ⚠️  geonode failed: {str(e)[:40]}")
+        
+        return proxies
+    
+    async def _scrape_proxyscrape(self) -> List[Dict]:
+        """ProxyScrape - NEW SOURCE (Large lists)"""
+        proxies = []
+        try:
+            # ProxyScrape API
+            url = "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=US&ssl=yes&anonymity=all"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                lines = response.text.strip().split('\n')
+                for line in lines[:200]:
+                    if ':' in line:
+                        parts = line.strip().split(':')
+                        if len(parts) == 2:
+                            ip, port = parts
+                            proxies.append({
+                                'server': f'http://{ip}:{port}',
+                                'ip': ip,
+                                'port': port,
+                                'country': 'US',
+                                'city': None,
+                                'timezone': None
+                            })
+        except Exception as e:
+            print(f"      ⚠️  proxyscrape failed: {str(e)[:40]}")
+        
+        return proxies
+    
+    async def _scrape_github_proxies(self) -> List[Dict]:
+        """GitHub proxy lists - NEW SOURCE (Community maintained)"""
+        proxies = []
+        try:
+            # TheSpeedX/PROXY-List (popular GitHub repo)
+            url = "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                lines = response.text.strip().split('\n')
+                # Check each proxy's country via API (sample only first 50 to avoid rate limits)
+                for line in lines[:50]:
+                    if ':' in line:
+                        parts = line.strip().split(':')
+                        if len(parts) == 2:
+                            ip, port = parts
+                            # Quick check if IP is US-based
+                            if await self._quick_check_us_ip(ip):
+                                proxies.append({
+                                    'server': f'http://{ip}:{port}',
+                                    'ip': ip,
+                                    'port': port,
+                                    'country': 'US',
+                                    'city': None,
+                                    'timezone': None
+                                })
+        except Exception as e:
+            print(f"      ⚠️  github proxies failed: {str(e)[:40]}")
+        
+        return proxies
+    
+    async def _quick_check_us_ip(self, ip: str) -> bool:
+        """Quick check if IP is US-based"""
+        try:
+            response = requests.get(f"http://ip-api.com/json/{ip}?fields=countryCode", timeout=3)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('countryCode') == 'US'
+        except:
+            pass
+        return False
+    
+    async def _enrich_proxy_info(self, proxy: Dict):
+        """Fetch geographic info and timezone for proxy IP"""
+        try:
             response = requests.get(
                 f"http://ip-api.com/json/{proxy['ip']}",
                 timeout=5
@@ -240,11 +356,10 @@ class ProxyManager:
                 data = response.json()
                 
                 if data.get('status') == 'success':
-                    # Verify it's actually US
                     country_code = data.get('countryCode', '')
                     
                     if country_code != 'US':
-                        print(f"      ⚠️  Proxy {proxy['ip']} is not US ({country_code}), marking as invalid")
+                        print(f"      ⚠️  Proxy {proxy['ip']} is not US ({country_code})")
                         proxy['country'] = country_code
                         return
                     
@@ -257,11 +372,9 @@ class ProxyManager:
                     print(f"   📍 US Proxy: {proxy['city']}, {proxy['region']} ({proxy['timezone']})")
         
         except Exception as e:
-            # If geolocation fails, use default US timezone
             proxy['timezone'] = 'America/New_York'
             proxy['city'] = 'Unknown'
             proxy['region'] = 'Unknown'
-            print(f"      ⚠️  Geolocation failed, using default US timezone")
     
     def mark_proxy_failed(self, proxy_server: str):
         """Mark a proxy as failed (remove from list)"""
