@@ -42,7 +42,7 @@ BROWSER_CONFIG = {
 
 # ===== TIMING CONFIGURATION =====
 TIMING = {
-    "page_load_timeout": 30000,      # 30 seconds
+    "page_load_timeout": 60000,      # 60 second
     "element_wait_timeout": 1000000,   # 10 seconds
     "typing_delay_min": 70,          # Min ms between keystrokes
     "typing_delay_max": 150,         # Max ms between keystrokes

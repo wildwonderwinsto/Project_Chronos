@@ -71,6 +71,7 @@ async def test_dry_run():
     
     await asyncio.sleep(3)
     
+    # Pass skip_proxy=True for testing
     engine = BrowserEngine(manual_captcha=False, test_mode=True)
     success, log_id = await engine.run_single_attempt()
     

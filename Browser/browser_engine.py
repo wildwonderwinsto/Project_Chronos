@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings('ignore', message='.*urllib3 v2 only supports OpenSSL.*')
+
 import os
 import random
 import asyncio
@@ -49,12 +52,46 @@ class BrowserEngine:
         # Create directories for error artifacts
         Path("screenshots").mkdir(exist_ok=True)
         Path("captcha_images").mkdir(exist_ok=True)
-    
+        
+    async def _test_proxy(self, proxy: dict) -> bool:
+        """
+        Test if a proxy works by attempting a quick page load with Playwright
+        Returns: True if proxy works, False if it fails
+        """
+        try:
+            from playwright.async_api import async_playwright
+            
+            # Try to load a simple page through the proxy
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                
+                context = await browser.new_context(
+                    proxy={'server': proxy['server']}
+                )
+                
+                page = await context.new_page()
+                
+                # Try to load a lightweight page
+                await page.goto('http://example.com', timeout=10000)
+                
+                await context.close()
+                await browser.close()
+                
+                return True
+        
+        except Exception as e:
+            return False
+
     async def run_single_attempt(self):
+        
         """
         Execute ONE complete form submission attempt
         Returns: (success: bool, log_id: str)
         """
+        
+        # Import managers
+        from Browser.proxy_manager import ProxyManager
+        from Browser.fingerprint_manager import FingerprintManager
         
         # Step 1: Generate persona
         persona = self.persona_generator.generate()
@@ -62,32 +99,122 @@ class BrowserEngine:
         
         self._print_header(full_name, persona['email'])
         
-        # Step 2: Create initial database log
+        # Step 2: Get proxy and fingerprint
+        proxy_mgr = ProxyManager()
+        fingerprint_mgr = FingerprintManager()
+        
+        # Try to get a working proxy (with retries)
+        proxy = None
+        max_proxy_attempts = 3
+        
+        for attempt in range(max_proxy_attempts):
+            candidate_proxy = await proxy_mgr.get_proxy()
+            
+            if not candidate_proxy:
+                print(f"   ⚠️  No proxy available, will use direct connection")
+                break
+            
+            # Test if proxy works
+            print(f"   🔍 Testing proxy {candidate_proxy['ip']}...")
+            if await self._test_proxy(candidate_proxy):
+                proxy = candidate_proxy
+                print(f"   ✅ Proxy validated!")
+                break
+            else:
+                print(f"   ❌ Proxy failed validation, trying next...")
+                proxy_mgr.mark_proxy_failed(candidate_proxy['server'])
+        
+        if proxy:
+            print(f"   🌐 Using proxy: {proxy['ip']} ({proxy['city']}, {proxy['country']})")
+            fingerprint = fingerprint_mgr.generate_fingerprint(timezone=proxy['timezone'])
+        else:
+            print(f"   🌐 Using direct connection (no proxy)")
+            fingerprint = fingerprint_mgr.generate_fingerprint()
+            proxy = None
+        
+        print(f"   🎭 Fingerprint: {fingerprint['browser_type'].title()} on {fingerprint['platform']}")
+        print(f"   🕐 Timezone: {fingerprint['timezone']}")
+    
+    
+        
+        # Step 3: Create initial database log
         if not self.test_mode:
             log_id = await self.db_logger.create_log(full_name, persona['email'])
             if not log_id:
                 return False, None
+            
+            # Log proxy info
+            if proxy:
+                await self._log_proxy_info(log_id, proxy)
         else:
             log_id = "TEST_MODE"
             print(f"   Test Mode: Skipping database log")
-       
-        # Step 3: Launch browser and attempt submission
+    
+        # Step 4: Launch browser with stealth
         try:
             async with async_playwright() as p:
+                # Build browser context options
+                context_options = {
+                    'viewport': fingerprint['viewport'],
+                    'user_agent': fingerprint['user_agent'],
+                    'timezone_id': fingerprint['timezone'],
+                    'locale': fingerprint['locale'],
+                    'permissions': [],
+                    'geolocation': None,
+                    'color_scheme': random.choice(['light', 'dark', 'no-preference'])
+                }
+                
+                # Add proxy if available
+                if proxy:
+                    context_options['proxy'] = {
+                        'server': proxy['server']
+                    }
+                
+                # Launch browser
                 browser = await p.chromium.launch(
-                    headless=BROWSER_CONFIG['headless'] and not self.manual_captcha and not self.test_mode
+                    headless=BROWSER_CONFIG['headless'] and not self.manual_captcha and not self.test_mode,
+                    args=[
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-dev-shm-usage',
+                        '--no-sandbox'
+                    ]
                 )
             
-                context = await browser.new_context(
-                    viewport=BROWSER_CONFIG['viewport'],
-                    user_agent=BROWSER_CONFIG['user_agent']
-                )
+                # Create context with fingerprint
+                context = await browser.new_context(**context_options)
+                
+                # Inject stealth scripts
+                await context.add_init_script("""
+                    // Remove webdriver flag
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+                    
+                    // Remove automation flags
+                    delete navigator.__proto__.webdriver;
+                    
+                    // Fix Chrome detection
+                    window.chrome = {
+                        runtime: {}
+                    };
+                    
+                    // Fix permissions
+                    const originalQuery = window.navigator.permissions.query;
+                    window.navigator.permissions.query = (parameters) => (
+                        parameters.name === 'notifications' ?
+                            Promise.resolve({ state: Notification.permission }) :
+                            originalQuery(parameters)
+                    );
+                """)
             
+                # Create page
                 page = await context.new_page()
             
                 print(f"   🌐 Navigating to target...")
                 await page.goto(TARGET_URL, timeout=TIMING['page_load_timeout'])
                 await asyncio.sleep(random.uniform(2, 3))
+            
+           
             
                 # Check if already entered
                 if await self._check_already_entered(page):
@@ -152,7 +279,20 @@ class BrowserEngine:
         except Exception as e:
             print(f"   ❌ CRITICAL ERROR: {str(e)}")
             return await self._handle_exception(page, log_id, e)
-    
+
+    async def _log_proxy_info(self, log_id: str, proxy: dict):
+        """Log proxy information to database"""
+        try:
+            self.supabase.table('attempt_logs').update({
+                'proxy_ip': proxy['ip'],
+                'proxy_city': proxy.get('city'),
+                'proxy_state': proxy.get('country'),
+                'proxy_isp': proxy.get('isp'),
+                'proxy_timezone': proxy.get('timezone')
+            }).eq('id', log_id).execute()
+        except Exception as e:
+            print(f"      ⚠️  Failed to log proxy info: {e}")
+
     def _print_header(self, name, email):
         """Print attempt header"""
         print(f"\n{'='*70}")
