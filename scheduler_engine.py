@@ -18,7 +18,44 @@ class ChronoScheduler:
     The Chrono-Logic Engine
     Manages automated scheduling with circadian rhythm, volume ramp-up, and panic mode
     """
-    
+    def _update_bot_status(self):
+        """Update bot status in database for dashboard"""
+        try:
+            from supabase import create_client
+            import os
+            
+            supabase = create_client(
+                os.getenv('SUPABASE_URL'),
+                os.getenv('SUPABASE_KEY')
+            )
+            
+            # Update or insert status
+            status_data = {
+                'status': 'PANIC_MODE' if self.in_panic_mode else 'RUNNING',
+                'current_mode': self._last_mode if hasattr(self, '_last_mode') else 'DAY',
+                'total_attempts': self.total_attempts,
+                'total_successes': self.total_successes,
+                'total_failures': self.total_failures,
+                'consecutive_failures': self.consecutive_failures,
+                'last_attempt_time': datetime.now(pytz.timezone(SCHEDULE_TIMEZONE)).isoformat(),
+                'target_frequency': self._last_frequency if hasattr(self, '_last_frequency') else 0,
+                'updated_at': datetime.now(pytz.timezone(SCHEDULE_TIMEZONE)).isoformat()
+            }
+            
+            # Try to update first
+            result = supabase.table('bot_status').select('id').limit(1).execute()
+            
+            if result.data:
+                # Update existing
+                supabase.table('bot_status').update(status_data).eq('id', result.data[0]['id']).execute()
+            else:
+                # Insert new
+                supabase.table('bot_status').insert(status_data).execute()
+                
+        except Exception as e:
+            print(f"   ⚠️  Failed to update bot status: {e}") 
+
+
     def __init__(self, use_proxies=True, manual_captcha=False):
         self.use_proxies = use_proxies
         self.manual_captcha = manual_captcha
@@ -69,7 +106,7 @@ class ChronoScheduler:
             
             # Run attempt
             await self._run_attempt()
-    
+            self._update_bot_status()
     def _should_terminate(self) -> bool:
         """Check if we've reached termination date"""
         now = datetime.now(pytz.timezone(SCHEDULE_TIMEZONE))

@@ -44,8 +44,13 @@ class ProxyManager:
         # Mark as used
         self.used_proxies.add(proxy['server'])
         
-        # Fetch geographic info
-        await self._enrich_proxy_info(proxy)
+        # Fetch geographic info - if it fails or not US, remove it
+        is_valid = await self._enrich_proxy_info(proxy)
+        
+        if not is_valid or proxy['country'] != 'US':
+            # Remove bad proxy and try again
+            self.mark_proxy_failed(proxy['server'])
+            return await self.get_proxy()  # Recursively try next
         
         return proxy
     
@@ -358,10 +363,11 @@ class ProxyManager:
                 if data.get('status') == 'success':
                     country_code = data.get('countryCode', '')
                     
+                    # CRITICAL: If not US, remove from list completely
                     if country_code != 'US':
-                        print(f"      ⚠️  Proxy {proxy['ip']} is not US ({country_code})")
-                        proxy['country'] = country_code
-                        return
+                        print(f"      ❌ Proxy {proxy['ip']} is {country_code}, removing")
+                        proxy['country'] = country_code  # Mark as non-US
+                        return False  # Signal to remove
                     
                     proxy['country'] = 'US'
                     proxy['city'] = data.get('city', 'Unknown')
@@ -370,11 +376,13 @@ class ProxyManager:
                     proxy['isp'] = data.get('isp', 'Unknown')
                     
                     print(f"   📍 US Proxy: {proxy['city']}, {proxy['region']} ({proxy['timezone']})")
+                    return True  # Valid US proxy
         
         except Exception as e:
             proxy['timezone'] = 'America/New_York'
             proxy['city'] = 'Unknown'
             proxy['region'] = 'Unknown'
+            return False  # Remove on error
     
     def mark_proxy_failed(self, proxy_server: str):
         """Mark a proxy as failed (remove from list)"""
