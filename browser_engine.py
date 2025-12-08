@@ -7,7 +7,7 @@ from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from dotenv import load_dotenv
 from supabase import create_client, Client
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 import io
 import re
 
@@ -31,14 +31,14 @@ SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 class BrowserEngine:
     """Core browser automation engine with strict context isolation"""
     
-    def __init__(self, manual_captcha=False):
+    def __init__(self, manual_captcha=False, test_mode=False):
         self.supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
         self.persona_generator = PersonaGenerator()
         self.manual_captcha = manual_captcha
+        self.test_mode = test_mode  # If True, don't actually submit
         
         # Create directories for error artifacts
         Path("screenshots").mkdir(exist_ok=True)
-        Path("html_snapshots").mkdir(exist_ok=True)
         Path("captcha_images").mkdir(exist_ok=True)
     
     async def run_single_attempt(self):
@@ -52,34 +52,41 @@ class BrowserEngine:
         full_name = f"{persona['first']} {persona['last']}"
         
         print(f"\n{'='*70}")
-        print(f"🎭 NEW ATTEMPT STARTING")
+        if self.test_mode:
+            print(f"🧪 TEST MODE - NO ACTUAL SUBMISSION")
+        else:
+            print(f"🎭 NEW ATTEMPT STARTING")
         print(f"{'='*70}")
         print(f"   Name: {full_name}")
         print(f"   Email: {persona['email']}")
         
-        # Step 2: Create initial database log (INITIATED status)
-        log_entry = {
-            'timestamp': datetime.utcnow().isoformat(),
-            'status': 'INITIATED',
-            'persona_name': full_name,
-            'persona_email': persona['email'],
-            'start_time': datetime.utcnow().isoformat()
-        }
-        
-        try:
-            response = self.supabase.table('attempt_logs').insert(log_entry).execute()
-            log_id = response.data[0]['id']
-            print(f"   Log ID: {log_id}")
-        except Exception as e:
-            print(f"❌ Failed to create log entry: {e}")
-            return False, None
+        # Step 2: Create initial database log (INITIATED status) - skip in test mode
+        if not self.test_mode:
+            log_entry = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'status': 'INITIATED',
+                'persona_name': full_name,
+                'persona_email': persona['email'],
+                'start_time': datetime.utcnow().isoformat()
+            }
+            
+            try:
+                response = self.supabase.table('attempt_logs').insert(log_entry).execute()
+                log_id = response.data[0]['id']
+                print(f"   Log ID: {log_id}")
+            except Exception as e:
+                print(f"❌ Failed to create log entry: {e}")
+                return False, None
+        else:
+            log_id = "TEST_MODE"
+            print(f"   Test Mode: Skipping database log")
        
         # Step 3: Launch browser and attempt submission
         try:
             async with async_playwright() as p:
                 # Launch browser with strict context isolation
                 browser = await p.chromium.launch(
-                    headless=BROWSER_CONFIG['headless'] and not self.manual_captcha
+                    headless=BROWSER_CONFIG['headless'] and not self.manual_captcha and not self.test_mode
                 )
             
                 # Create NEW context (isolated session)
@@ -108,14 +115,13 @@ class BrowserEngine:
                 
                 if already_entered:
                     print(f"   ⚠️  Browser context shows already entered (localStorage)")
-                    # This shouldn't happen with fresh context, but log it
-                    await self._update_log_failure(
-                        log_id,
-                        datetime.utcnow().isoformat(),
-                        "ALREADY_ENTERED_LOCALSTORAGE",
-                        None,
-                        None
-                    )
+                    if not self.test_mode:
+                        await self._update_log_failure(
+                            log_id,
+                            datetime.utcnow().isoformat(),
+                            "ALREADY_ENTERED_LOCALSTORAGE",
+                            None
+                        )
                     await context.close()
                     await browser.close()
                     return False, log_id
@@ -173,13 +179,13 @@ class BrowserEngine:
                 
                 if not captcha_solved:
                     print(f"   ❌ CAPTCHA solving failed")
-                    await self._update_log_failure(
-                        log_id,
-                        datetime.utcnow().isoformat(),
-                        "CAPTCHA_FAILED",
-                        await self._capture_screenshot(page, log_id),
-                        await self._capture_html(page, log_id)
-                    )
+                    if not self.test_mode:
+                        await self._update_log_failure(
+                            log_id,
+                            datetime.utcnow().isoformat(),
+                            "CAPTCHA_FAILED",
+                            await self._capture_screenshot(page, log_id)
+                        )
                     await context.close()
                     await browser.close()
                     return False, log_id
@@ -189,6 +195,21 @@ class BrowserEngine:
                 # Handle social action links (click them to mark as complete)
                 await self._handle_social_actions(page)
                 
+                # TEST MODE: Stop here, don't submit
+                if self.test_mode:
+                    print(f"\n   🧪 TEST MODE: Stopping before submission")
+                    print(f"   ✅ Form filled and ready to submit")
+                    print(f"   👀 Browser will stay open for 30 seconds for you to inspect")
+                    
+                    await asyncio.sleep(30)
+                    
+                    await context.close()
+                    await browser.close()
+                    
+                    print(f"{'='*70}\n")
+                    return True, log_id
+                
+                # PRODUCTION MODE: Actually submit
                 print(f"   📤 Submitting form...")
                 
                 # Submit the form
@@ -213,14 +234,12 @@ class BrowserEngine:
                     
                     # Capture error artifacts
                     screenshot_path = await self._capture_screenshot(page, log_id)
-                    html_path = await self._capture_html(page, log_id)
                     
                     await self._update_log_failure(
                         log_id, 
                         end_time, 
                         reason, 
-                        screenshot_path, 
-                        html_path
+                        screenshot_path
                     )
                 
                 # Cleanup
@@ -237,20 +256,18 @@ class BrowserEngine:
             # Try to capture error state
             try:
                 screenshot_path = await self._capture_screenshot(page, log_id)
-                html_path = await self._capture_html(page, log_id)
             except:
                 screenshot_path = None
-                html_path = None
             
-            # Update log with error
-            end_time = datetime.utcnow().isoformat()
-            await self._update_log_failure(
-                log_id,
-                end_time,
-                f"EXCEPTION: {str(e)}",
-                screenshot_path,
-                html_path
-            )
+            # Update log with error (skip in test mode)
+            if not self.test_mode:
+                end_time = datetime.utcnow().isoformat()
+                await self._update_log_failure(
+                    log_id,
+                    end_time,
+                    f"EXCEPTION: {str(e)}",
+                    screenshot_path
+                )
             
             print(f"{'='*70}\n")
             return False, log_id
@@ -284,7 +301,7 @@ class BrowserEngine:
                 return False
             
             else:
-                # AUTOMATIC MODE: Use OCR
+                # AUTOMATIC MODE: Use OCR with enhanced preprocessing
                 print(f"   🤖 Attempting automatic OCR...")
                 
                 # Get the CAPTCHA image element
@@ -296,33 +313,103 @@ class BrowserEngine:
                 # Take screenshot of the CAPTCHA
                 captcha_screenshot = await captcha_img.screenshot()
                 
-                # Save for debugging
-                captcha_path = f"captcha_images/{log_id}.png"
+                # Save original for debugging
+                captcha_path = f"captcha_images/{log_id}_original.png"
                 with open(captcha_path, 'wb') as f:
                     f.write(captcha_screenshot)
                 
                 # Open with PIL
                 image = Image.open(io.BytesIO(captcha_screenshot))
                 
-                # Preprocess image for better OCR
-                image = image.convert('L')  # Convert to grayscale
+                # Enhanced preprocessing for better OCR accuracy
+                # 1. Resize to 3x size (helps OCR recognize small text)
+                width, height = image.size
+                image = image.resize((width * 3, height * 3), Image.LANCZOS)
                 
-                # Use pytesseract to extract text
-                captcha_text = pytesseract.image_to_string(image, config='--psm 7')
+                # 2. Convert to grayscale
+                image = image.convert('L')
                 
-                # Clean the text
-                captcha_text = re.sub(r'[^a-zA-Z0-9]', '', captcha_text).strip()
+                # 3. Increase contrast heavily
+                enhancer = ImageEnhance.Contrast(image)
+                image = enhancer.enhance(3.0)
                 
-                print(f"   📝 OCR detected: '{captcha_text}'")
+                # 4. Increase brightness slightly
+                enhancer = ImageEnhance.Brightness(image)
+                image = enhancer.enhance(1.2)
+                
+                # 5. Apply threshold to make it pure black and white
+                # Try to find optimal threshold
+                threshold = 140  # Adjusted for this CAPTCHA style
+                image = image.point(lambda p: 0 if p < threshold else 255)
+                
+                # 6. Sharpen
+                enhancer = ImageEnhance.Sharpness(image)
+                image = enhancer.enhance(2.0)
+                
+                # Save preprocessed image for debugging
+                preprocessed_path = f"captcha_images/{log_id}_preprocessed.png"
+                image.save(preprocessed_path)
+                
+                # Try multiple OCR configurations for better accuracy
+                captcha_attempts = []
+                
+                # Attempt 1: Default config with character whitelist
+                try:
+                    text1 = pytesseract.image_to_string(
+                        image, 
+                        config='--psm 7 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+                    )
+                    captcha_attempts.append(re.sub(r'[^a-zA-Z0-9]', '', text1).strip())
+                except:
+                    pass
+                
+                # Attempt 2: Single word mode
+                try:
+                    text2 = pytesseract.image_to_string(
+                        image, 
+                        config='--psm 8 --oem 3'
+                    )
+                    captcha_attempts.append(re.sub(r'[^a-zA-Z0-9]', '', text2).strip())
+                except:
+                    pass
+                
+                # Attempt 3: With different preprocessing (inverted colors)
+                try:
+                    inverted = Image.eval(image, lambda x: 255 - x)
+                    text3 = pytesseract.image_to_string(
+                        inverted,
+                        config='--psm 7 --oem 3'
+                    )
+                    captcha_attempts.append(re.sub(r'[^a-zA-Z0-9]', '', text3).strip())
+                except:
+                    pass
+                
+                # Pick the longest result (usually most accurate)
+                captcha_text = max(captcha_attempts, key=len) if captcha_attempts else ""
+                
+                print(f"   📝 OCR attempts: {captcha_attempts}")
+                print(f"   ✅ Selected: '{captcha_text}' (length: {len(captcha_text)})")
+                
+                if len(captcha_text) == 0:
+                    print(f"   ❌ OCR failed completely - empty result")
+                    print(f"   📁 Check images: {captcha_path} and {preprocessed_path}")
+                    if self.test_mode:
+                        print(f"   🖐️  In test mode - you can manually check the images")
+                        return False
+                    return False
                 
                 if len(captcha_text) < 3:
-                    print(f"   ⚠️  OCR result too short, might be inaccurate")
-                    # You can decide to retry or fail here
+                    print(f"   ⚠️  OCR result suspiciously short")
+                    print(f"   📁 Check: {preprocessed_path}")
                 
                 # Fill in the CAPTCHA field
                 await page.fill(FORM_SELECTORS['captcha'], captcha_text)
                 
                 print(f"   ✅ CAPTCHA filled with OCR result")
+                
+                # Give a moment to see the filled value
+                await asyncio.sleep(1)
+                
                 return True
                 
         except Exception as e:
@@ -404,55 +491,82 @@ class BrowserEngine:
         """
         actions_completed = 0
         
-        # Get all action links
-        action_selectors = [
-            'a[data-action-id="1765"]',  # Instagram
-            'a[data-action-id="1766"]',  # TikTok
-            'a[data-action-id="1767"]',  # Facebook
-            'a[data-action-id="1768"]',  # Discord
-            'a[data-action-id="1769"]',  # YouTube
-            'a[data-action-id="1770"]',  # Reddit
-            'a[data-action-id="1771"]',  # Twitch
-            'a[data-action-id="1772"]',  # Twitter
-        ]
+        # Action IDs from the HTML
+        action_ids = ['1765', '1766', '1767', '1768', '1769', '1770', '1771', '1772']
         
-        for selector in action_selectors:
+        print(f"      🔗 Processing {len(action_ids)} social actions...")
+        
+        for action_id in action_ids:
             try:
-                # Check if the action link exists and is visible
+                # Build selector for this action
+                selector = f'a[data-action-id="{action_id}"]'
+                
+                # Check if already completed
+                already_complete = await page.evaluate(f'''
+                    () => {{
+                        const tick = document.getElementById('tick_{action_id}');
+                        if (tick) {{
+                            const style = window.getComputedStyle(tick);
+                            return style.display !== 'none' && style.visibility !== 'hidden';
+                        }}
+                        return false;
+                    }}
+                ''')
+                
+                if already_complete:
+                    print(f"         ✓ Action {action_id} already complete")
+                    continue
+                
+                # Check if the action link exists
                 element = await page.query_selector(selector)
                 
-                if element:
-                    # Check if already completed
-                    action_id = await element.get_attribute('data-action-id')
-                    already_complete = await page.evaluate(f'''
-                        () => {{
-                            const tick = document.getElementById('tick_{action_id}');
-                            return tick && tick.style.display !== 'none';
-                        }}
-                    ''')
+                if not element:
+                    print(f"         ⚠️  Action {action_id} link not found")
+                    continue
+                
+                # Try to click it - this will open a popup
+                print(f"         🖱️  Clicking action {action_id}...")
+                
+                try:
+                    # Method 1: Try to catch popup and close
+                    async with page.expect_popup(timeout=5000) as popup_info:
+                        await page.click(selector, timeout=3000)
                     
-                    if not already_complete:
-                        # Open the link in a new tab and immediately close it
-                        async with page.expect_popup() as popup_info:
-                            await page.click(selector)
-                        
-                        popup = await popup_info.value
-                        await asyncio.sleep(0.5)  # Brief delay
-                        await popup.close()
-                        
-                        # Wait for the action to be marked complete
-                        await asyncio.sleep(0.5)
-                        
-                        actions_completed += 1
+                    popup = await popup_info.value
+                    await asyncio.sleep(0.3)
+                    await popup.close()
+                    print(f"         ✓ Popup opened and closed for {action_id}")
+                    
+                except Exception as popup_error:
+                    # Method 2: Click might not open popup (might just register)
+                    print(f"         ℹ️  No popup for {action_id} (might be registered anyway)")
+                
+                # Wait a bit for the action to register
+                await asyncio.sleep(0.5)
+                
+                # Verify it was marked complete
+                now_complete = await page.evaluate(f'''
+                    () => {{
+                        const tick = document.getElementById('tick_{action_id}');
+                        if (tick) {{
+                            const style = window.getComputedStyle(tick);
+                            return style.display !== 'none' && style.visibility !== 'hidden';
+                        }}
+                        return false;
+                    }}
+                ''')
+                
+                if now_complete:
+                    actions_completed += 1
+                    print(f"         ✅ Action {action_id} completed!")
+                else:
+                    print(f"         ⚠️  Action {action_id} might not have registered")
                     
             except Exception as e:
-                # Continue even if one action fails
+                print(f"         ❌ Error with action {action_id}: {str(e)[:50]}")
                 continue
         
-        if actions_completed > 0:
-            print(f"      ✓ Completed {actions_completed} social actions")
-        else:
-            print(f"      ℹ️  Social actions already complete or not found")
+        print(f"      📊 Completed {actions_completed}/{len(action_ids)} social actions")
     
     async def _verify_submission(self, page: Page):
         """
@@ -533,21 +647,11 @@ class BrowserEngine:
         return False, "UNKNOWN_STATE"
     
     async def _capture_screenshot(self, page: Page, log_id: str):
-        """Capture screenshot on failure"""
+        """Capture screenshot for debugging"""
         try:
             filename = f"screenshots/{log_id}.png"
             await page.screenshot(path=filename, full_page=True)
-            return filename
-        except:
-            return None
-    
-    async def _capture_html(self, page: Page, log_id: str):
-        """Capture HTML snapshot on failure"""
-        try:
-            filename = f"html_snapshots/{log_id}.html"
-            html_content = await page.content()
-            with open(filename, 'w', encoding='utf-8') as f:
-                f.write(html_content)
+            print(f"      📸 Screenshot saved: {filename}")
             return filename
         except:
             return None
@@ -565,7 +669,7 @@ class BrowserEngine:
             print(f"⚠️  Failed to update success log: {e}")
     
     async def _update_log_failure(self, log_id: str, end_time: str, reason: str, 
-                                   screenshot_path: str, html_path: str):
+                                   screenshot_path: str):
         """Update database log with failure status"""
         try:
             self.supabase.table('attempt_logs').update({
@@ -573,8 +677,7 @@ class BrowserEngine:
                 'end_time': end_time,
                 'error_code': reason.split(':')[0] if ':' in reason else reason,
                 'error_message': reason,
-                'screenshot_path': screenshot_path,
-                'html_snapshot_path': html_path
+                'screenshot_path': screenshot_path
             }).eq('id', log_id).execute()
         except Exception as e:
             print(f"⚠️  Failed to update failure log: {e}")
@@ -594,7 +697,7 @@ async def test_browser_engine_auto():
     
     await asyncio.sleep(3)
     
-    engine = BrowserEngine(manual_captcha=False)
+    engine = BrowserEngine(manual_captcha=False, test_mode=False)
     success, log_id = await engine.run_single_attempt()
     
     print("\n" + "="*70)
@@ -618,7 +721,7 @@ async def test_browser_engine_manual():
     
     await asyncio.sleep(3)
     
-    engine = BrowserEngine(manual_captcha=True)
+    engine = BrowserEngine(manual_captcha=True, test_mode=False)
     success, log_id = await engine.run_single_attempt()
     
     print("\n" + "="*70)
@@ -630,10 +733,44 @@ async def test_browser_engine_manual():
     print("="*70)
 
 
+async def test_browser_engine_dryrun():
+    """Test mode - fills form but DOESN'T submit (for testing)"""
+    
+    print("\n" + "="*70)
+    print("🧪 DRY RUN MODE - NO SUBMISSION")
+    print("="*70)
+    print("\n✅ This will fill the form but NOT submit it")
+    print("   Browser stays open for 30 seconds so you can inspect")
+    print("   No database logs are created")
+    print("\nStarting test in 3 seconds...\n")
+    
+    await asyncio.sleep(3)
+    
+    engine = BrowserEngine(manual_captcha=False, test_mode=True)
+    success, log_id = await engine.run_single_attempt()
+    
+    print("\n" + "="*70)
+    print("📊 DRY RUN COMPLETE")
+    print("="*70)
+    print(f"   Form filled successfully: {success}")
+    print("\n✅ Check captcha_images/ to see OCR results!")
+    print("="*70)
+
+
 if __name__ == "__main__":
     import sys
     
-    if len(sys.argv) > 1 and sys.argv[1] == "manual":
-        asyncio.run(test_browser_engine_manual())
+    if len(sys.argv) > 1:
+        mode = sys.argv[1].lower()
+        if mode == "manual":
+            asyncio.run(test_browser_engine_manual())
+        elif mode == "test":
+            asyncio.run(test_browser_engine_dryrun())
+        else:
+            print("❌ Unknown mode. Use: manual, test, or no argument for auto")
+            print("\nAvailable commands:")
+            print("  python browser_engine.py          # Auto OCR mode (submits)")
+            print("  python browser_engine.py manual   # Manual CAPTCHA mode (submits)")
+            print("  python browser_engine.py test     # Dry run mode (NO submit)")
     else:
         asyncio.run(test_browser_engine_auto())
