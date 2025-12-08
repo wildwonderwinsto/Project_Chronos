@@ -1,5 +1,12 @@
 import asyncio
-from .browser_engine import BrowserEngine
+import sys
+from pathlib import Path
+
+# Add parent directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Now import without dots
+from Browser.browser_engine import BrowserEngine
 
 
 async def test_auto_mode():
@@ -76,8 +83,6 @@ async def test_dry_run():
 
 
 if __name__ == "__main__":
-    import sys
-    
     if len(sys.argv) > 1:
         mode = sys.argv[1].lower()
         if mode == "manual":
@@ -92,3 +97,5 @@ if __name__ == "__main__":
             print("  python test_runners.py test     # Dry run mode (NO submit)")
     else:
         asyncio.run(test_auto_mode())
+
+#python Browser/start.py test

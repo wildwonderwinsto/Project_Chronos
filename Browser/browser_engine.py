@@ -15,13 +15,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from persona_generator import PersonaGenerator
 from config import TARGET_URL, BROWSER_CONFIG, TIMING
 
-# Import from same directory (Browser/)
-from form_filler import FormFiller
-from captcha_solver import CaptchaSolver
-from social_actions import SocialActionsHandler
-from submission_verifier import SubmissionVerifier
-from database_logger import DatabaseLogger
-from screenshot_manager import ScreenshotManager
+# Import from same directory (Browser/) - NO DOTS when running as script
+from Browser.form_filler import FormFiller
+from Browser.captcha_solver import CaptchaSolver
+from Browser.social_actions import SocialActionsHandler
+from Browser.submission_verifier import SubmissionVerifier
+from Browser.database_logger import DatabaseLogger
+from Browser.screenshot_manager import ScreenshotManager
 
 load_dotenv()
 
