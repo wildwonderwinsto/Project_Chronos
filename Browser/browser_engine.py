@@ -16,9 +16,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import from parent directory (Project_Chronos/)
 from persona_generator import PersonaGenerator
-from config import TARGET_URL, BROWSER_CONFIG, TIMING
+from config import TARGET_URL, BROWSER_CONFIG, TIMING, FORM_SELECTORS
 
-# Import from same directory (Browser/) - NO DOTS when running as script
+# Import from same directory (Browser/)
 from Browser.form_filler import FormFiller
 from Browser.captcha_solver import CaptchaSolver
 from Browser.social_actions import SocialActionsHandler
@@ -55,13 +55,13 @@ class BrowserEngine:
         
     async def _test_proxy(self, proxy: dict) -> bool:
         """
-        Test if a proxy works by attempting a quick page load with Playwright
+        Test if a proxy works by attempting a quick HTTPS page load
         Returns: True if proxy works, False if it fails
         """
         try:
             from playwright.async_api import async_playwright
             
-            # Try to load a simple page through the proxy
+            # Try to load a simple HTTPS page through the proxy (to match target)
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
                 
@@ -71,8 +71,9 @@ class BrowserEngine:
                 
                 page = await context.new_page()
                 
-                # Try to load a lightweight page
-                await page.goto('http://example.com', timeout=10000)
+                # Test with HTTPS since our target uses HTTPS
+                # Use a fast, reliable HTTPS endpoint
+                await page.goto('https://www.google.com', timeout=15000, wait_until='domcontentloaded')
                 
                 await context.close()
                 await browser.close()
@@ -80,10 +81,10 @@ class BrowserEngine:
                 return True
         
         except Exception as e:
+            print(f"      ⚠️  Proxy test failed: {str(e)[:60]}")
             return False
 
     async def run_single_attempt(self):
-        
         """
         Execute ONE complete form submission attempt
         Returns: (success: bool, log_id: str)
@@ -134,8 +135,6 @@ class BrowserEngine:
         
         print(f"   🎭 Fingerprint: {fingerprint['browser_type'].title()} on {fingerprint['platform']}")
         print(f"   🕐 Timezone: {fingerprint['timezone']}")
-    
-    
         
         # Step 3: Create initial database log
         if not self.test_mode:
@@ -176,14 +175,17 @@ class BrowserEngine:
                     args=[
                         '--disable-blink-features=AutomationControlled',
                         '--disable-dev-shm-usage',
-                        '--no-sandbox'
+                        '--no-sandbox',
+                        '--incognito',  
+                        '--disable-extensions',
                     ]
                 )
             
                 # Create context with fingerprint
                 context = await browser.new_context(**context_options)
                 
-                # Inject stealth scripts
+                # Inject stealth scripts - COMBINED into one init script
+               # Inject stealth scripts - COMBINED into one init script
                 await context.add_init_script("""
                     // Remove webdriver flag
                     Object.defineProperty(navigator, 'webdriver', {
@@ -209,26 +211,52 @@ class BrowserEngine:
             
                 # Create page
                 page = await context.new_page()
-            
+
                 print(f"   🌐 Navigating to target...")
+                
                 await page.goto(TARGET_URL, timeout=TIMING['page_load_timeout'])
                 await asyncio.sleep(random.uniform(2, 3))
-            
+
+                # Clear storage AFTER page is fully loaded with proper document context
+                try:
+                    await page.evaluate("""
+                        () => {
+                            try {
+                                localStorage.clear();
+                                sessionStorage.clear();
+                                // Clear all cookies
+                                document.cookie.split(";").forEach(function(c) { 
+                                    document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+                                });
+                            } catch (e) {
+                                console.log('Storage clearing skipped:', e);
+                            }
+                        }
+                    """)
+                    print(f"   🧹 Cleared all storage and cookies")
+                except Exception as e:
+                    print(f"   ℹ️  Storage clearing not available: {e}")
+
+                # Debug: Check what's in localStorage
+                try:
+                    stored_data = await page.evaluate("""
+                        () => {
+                            try {
+                                return {
+                                    localStorage: Object.keys(localStorage).length > 0 ? JSON.stringify(localStorage) : 'empty',
+                                    cookies: document.cookie || 'empty',
+                                    comp_388: localStorage.getItem('comp_388')
+                                }
+                            } catch (e) {
+                                return { error: e.toString() }
+                            }
+                        }
+                    """)
+                    print(f"   🔍 Storage check: {stored_data}")
+                except Exception as e:
+                    print(f"   ℹ️  Storage check not available: {e}")         
            
-            
-                # Check if already entered
-                if await self._check_already_entered(page):
-                    if not self.test_mode:
-                        await self.db_logger.log_failure(
-                            log_id,
-                            "ALREADY_ENTERED_LOCALSTORAGE",
-                            None
-                        )
-                    await context.close()
-                    await browser.close()
-                    return False, log_id
-            
-                # Open the form
+                # Open the form (don't check localStorage before opening - it's set AFTER submission)
                 if not await self._open_form(page):
                     raise Exception("Failed to open form")
                 
@@ -252,6 +280,25 @@ class BrowserEngine:
                 # Handle social actions
                 print(f"   🎯 Completing social actions...")
                 await self.social_handler.handle_actions(page)
+
+                # Check if CAPTCHA changed after social actions
+                print(f"   🔍 Verifying CAPTCHA still valid...")
+                try:
+                    current_captcha = await page.input_value(FORM_SELECTORS['captcha'])
+                    if not current_captcha or len(current_captcha) == 0:
+                        print(f"   ⚠️  CAPTCHA cleared after social actions, re-solving...")
+                        captcha_solved = await self.captcha_solver.solve(page, log_id)
+                        
+                        if not captcha_solved:
+                            print(f"   ❌ CAPTCHA re-solve failed")
+                            if not self.test_mode:
+                                screenshot = await self.screenshot_manager.capture(page, log_id)
+                                await self.db_logger.log_failure(log_id, "CAPTCHA_RESET_FAILED", screenshot)
+                            await context.close()
+                            await browser.close()
+                            return False, log_id
+                except Exception as e:
+                    print(f"   ℹ️  Could not verify CAPTCHA: {e}")
                 
                 # TEST MODE: Stop before submission
                 if self.test_mode:
@@ -305,7 +352,7 @@ class BrowserEngine:
         print(f"   Email: {email}")
     
     async def _check_already_entered(self, page):
-        """Check if already entered via localStorage"""
+        """Check if already entered via localStorage (only after submission)"""
         already_entered = await page.evaluate('''
             () => {
                 return localStorage.getItem("comp_388") !== null;
@@ -319,8 +366,6 @@ class BrowserEngine:
     
     async def _open_form(self, page):
         """Click Start button to reveal form"""
-        from config import FORM_SELECTORS
-        
         try:
             print(f"   🔍 Looking for Start button...")
             
@@ -360,8 +405,6 @@ class BrowserEngine:
     
     async def _submit_and_verify(self, page):
         """Submit form and verify result"""
-        from config import FORM_SELECTORS
-        
         await page.click(FORM_SELECTORS['submit_button'])
         await asyncio.sleep(random.uniform(3, 5))
         

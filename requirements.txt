@@ -44,3 +44,4 @@ typing_extensions==4.15.0
 urllib3==2.6.0
 websockets==15.0.1
 yarl==1.22.0
+pytz==2024.2

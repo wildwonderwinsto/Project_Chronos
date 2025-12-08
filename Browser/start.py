@@ -100,3 +100,4 @@ if __name__ == "__main__":
         asyncio.run(test_auto_mode())
 
 #python Browser/start.py test
+#source .venv/bin/activate
