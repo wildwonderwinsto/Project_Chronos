@@ -3,256 +3,348 @@ import string
 from datetime import datetime
 from faker import Faker
 
-# Initialize Faker with US locale
 fake = Faker('en_US')
 
 class PersonaGenerator:
-    """Generates realistic, internally consistent fake identities"""
+    """Generates highly realistic, internally consistent fake identities"""
     
-    # Master email accounts (all aliases route here)
+    # Master email accounts (weighted by real-world usage)
     MASTER_EMAILS = {
-        "gmail.com": "",      # Replace with your actual Gmail
-        "outlook.com": "", # Replace with your actual Outlook
-        "yahoo.com": "",       # Replace with your actual Yahoo
-        "icloud.com": "",    # Replace with your actual iCloud
+        "gmail.com": "",      # Replace with your actual Gmail (60% market share)
+        "outlook.com": "",    # Replace with your actual Outlook (15%)
+        "yahoo.com": "",      # Replace with your actual Yahoo (10%)
+        "icloud.com": "",     # Replace with your actual iCloud (10%)
+        "protonmail.com": "", # Replace with your actual ProtonMail (5%)
     }
     
-    # Common keyboard typo patterns (adjacent keys)
+    DOMAIN_WEIGHTS = [60, 15, 10, 10, 5]  # Probability weights for each domain
+    
+    # Enhanced typo patterns
     TYPO_MAP = {
-        'a': ['s', 'q', 'w'],
-        'e': ['w', 'r', 'd'],
-        'i': ['u', 'o', 'k'],
-        'o': ['i', 'p', 'l'],
-        's': ['a', 'd', 'w'],
-        't': ['r', 'y', 'g'],
-        'n': ['b', 'm', 'h'],
-        'r': ['e', 't', 'f']
+        'a': ['s', 'q', 'w', 'z'],
+        'b': ['v', 'n', 'g', 'h'],
+        'c': ['x', 'v', 'd', 'f'],
+        'd': ['s', 'f', 'e', 'r', 'c'],
+        'e': ['w', 'r', 'd', 's'],
+        'f': ['d', 'g', 'r', 't', 'v'],
+        'g': ['f', 'h', 't', 'y', 'b'],
+        'h': ['g', 'j', 'y', 'u', 'n'],
+        'i': ['u', 'o', 'k', 'j'],
+        'j': ['h', 'k', 'u', 'i', 'n'],
+        'k': ['j', 'l', 'i', 'o', 'm'],
+        'l': ['k', 'o', 'p'],
+        'm': ['n', 'k', 'j'],
+        'n': ['b', 'm', 'h', 'j'],
+        'o': ['i', 'p', 'l', 'k'],
+        'p': ['o', 'l'],
+        'q': ['w', 'a'],
+        'r': ['e', 't', 'f', 'd'],
+        's': ['a', 'd', 'w', 'e', 'x'],
+        't': ['r', 'y', 'g', 'f'],
+        'u': ['y', 'i', 'j', 'h'],
+        'v': ['c', 'b', 'f', 'g'],
+        'w': ['q', 'e', 's', 'a'],
+        'x': ['z', 'c', 's', 'd'],
+        'y': ['t', 'u', 'h', 'g'],
+        'z': ['x', 'a', 's']
+    }
+    
+    # Common nicknames
+    NICKNAMES = {
+        'Michael': ['Mike', 'Mikey', 'Mick'],
+        'William': ['Will', 'Bill', 'Billy', 'Liam'],
+        'James': ['Jim', 'Jimmy', 'Jamie'],
+        'Robert': ['Rob', 'Bob', 'Bobby', 'Robbie'],
+        'Richard': ['Rick', 'Dick', 'Ricky', 'Rich'],
+        'Christopher': ['Chris', 'Topher'],
+        'Matthew': ['Matt', 'Matty'],
+        'Daniel': ['Dan', 'Danny'],
+        'David': ['Dave', 'Davey'],
+        'Joseph': ['Joe', 'Joey'],
+        'Jennifer': ['Jen', 'Jenny', 'Jenn'],
+        'Elizabeth': ['Liz', 'Beth', 'Betty', 'Lizzy'],
+        'Jessica': ['Jess', 'Jessie'],
+        'Katherine': ['Kate', 'Katie', 'Kathy', 'Kat'],
+        'Margaret': ['Maggie', 'Meg', 'Peggy'],
+        'Rebecca': ['Becky', 'Becca'],
+        'Samantha': ['Sam', 'Sammy'],
+        'Patricia': ['Pat', 'Patty', 'Tricia'],
+        'Christine': ['Chris', 'Christie', 'Tina'],
+        'Kimberly': ['Kim', 'Kimmy']
     }
     
     def __init__(self):
         self.fake = Faker('en_US')
     
     def generate(self):
-        """Generate a complete persona with first/last name and routed email"""
+        """Generate a complete persona with realistic variations"""
         
         # Step 1: Generate core identity
         first_name = self.fake.first_name()
         last_name = self.fake.last_name()
         
-        # Step 2: Apply "Fat Finger" typo (5% chance, name only)
-        if random.random() < 0.05:
-            first_name = self._inject_typo(first_name)
-        if random.random() < 0.05:
-            last_name = self._inject_typo(last_name)
+        # Step 2: Apply nickname (30% chance)
+        if random.random() < 0.30 and first_name in self.NICKNAMES:
+            first_name = random.choice(self.NICKNAMES[first_name])
         
-        # Step 3: Generate email (50% chance name-based, 50% random username)
-        email = self._generate_email(first_name, last_name)
+        # Step 3: Apply realistic typos (8% chance for name-based emails)
+        original_first = first_name
+        original_last = last_name
+        has_typo = False
+        
+        if random.random() < 0.08:
+            typo_type = random.choice(['adjacent', 'double', 'omit', 'transpose'])
+            if random.random() < 0.5:  # Typo in first or last
+                first_name = self._apply_realistic_typo(first_name, typo_type)
+            else:
+                last_name = self._apply_realistic_typo(last_name, typo_type)
+            has_typo = True
+        
+        # Step 4: Add middle initial (25% chance)
+        middle_initial = ""
+        if random.random() < 0.25:
+            middle_initial = random.choice(string.ascii_uppercase)
+        
+        # Step 5: Generate realistic age
+        birth_year = self._generate_realistic_birth_year()
+        
+        # Step 6: Generate email
+        email = self._generate_email(original_first, original_last, birth_year)
         
         return {
             "first": first_name,
+            "middle": middle_initial,
             "last": last_name,
-            "email": email
+            "email": email,
+            "birth_year": birth_year,
+            "has_typo": has_typo
         }
     
-    def _inject_typo(self, text):
-        """Simulate human typing error (adjacent key substitution)"""
+    def _apply_realistic_typo(self, text, typo_type):
+        """Apply various realistic typing errors"""
+        if len(text) < 2:
+            return text
+        
         text_lower = text.lower()
-        typo_candidates = [i for i, char in enumerate(text_lower) if char in self.TYPO_MAP]
         
-        if not typo_candidates:
-            return text  # No typo-able characters
+        if typo_type == 'adjacent' and any(c in self.TYPO_MAP for c in text_lower):
+            # Adjacent key substitution
+            typo_candidates = [i for i, char in enumerate(text_lower) if char in self.TYPO_MAP]
+            if typo_candidates:
+                idx = random.choice(typo_candidates)
+                char = text_lower[idx]
+                typo_char = random.choice(self.TYPO_MAP[char])
+                text_list = list(text)
+                text_list[idx] = typo_char.upper() if text[idx].isupper() else typo_char
+                return ''.join(text_list)
         
-        # Pick random character to mistype
-        typo_index = random.choice(typo_candidates)
-        char_to_replace = text_lower[typo_index]
-        typo_char = random.choice(self.TYPO_MAP[char_to_replace])
+        elif typo_type == 'double':
+            # Double letter (common with fast typing)
+            idx = random.randint(1, len(text) - 1)
+            return text[:idx] + text[idx-1] + text[idx:]
         
-        # Replace in original text (preserve case)
-        text_list = list(text)
-        if text[typo_index].isupper():
-            typo_char = typo_char.upper()
-        text_list[typo_index] = typo_char
+        elif typo_type == 'omit':
+            # Missing letter
+            if len(text) > 3:
+                idx = random.randint(1, len(text) - 2)
+                return text[:idx] + text[idx+1:]
         
-        return ''.join(text_list)
+        elif typo_type == 'transpose':
+            # Swap adjacent letters
+            if len(text) > 2:
+                idx = random.randint(0, len(text) - 2)
+                text_list = list(text)
+                text_list[idx], text_list[idx+1] = text_list[idx+1], text_list[idx]
+                return ''.join(text_list)
+        
+        return text
     
-    def _generate_email(self, first_name, last_name):
-        """
-        Generate email with Gmail+ style aliasing that routes to master account
+    def _generate_realistic_birth_year(self):
+        """Generate realistic age distribution (not everyone is 20-something)"""
+        # Age distribution based on internet users
+        age_ranges = [
+            (18, 25, 20),  # Young adults - 20%
+            (26, 35, 30),  # Millennials - 30%
+            (36, 45, 25),  # Gen X - 25%
+            (46, 60, 20),  # Boomers - 20%
+            (61, 75, 5),   # Seniors - 5%
+        ]
         
-        50% chance: Name-based (j.smith, john.smith, etc.)
-        50% chance: Random username (coolguy47, happycat29, etc.)
+        current_year = datetime.now().year
+        ranges, weights = zip(*[(r, w) for *r, w in age_ranges])
+        age_range = random.choices(ranges, weights=weights)[0]
+        age = random.randint(age_range[0], age_range[1])
+        return current_year - age
+    
+    def _generate_email(self, first_name, last_name, birth_year):
+        """Generate realistic email with proper domain distribution"""
         
-        All emails use + aliasing:
-        - Gmail: masteraccount+alias@gmail.com → routes to masteraccount@gmail.com
-        - Outlook: masteraccount+alias@outlook.com → routes to masteraccount@outlook.com
-        """
-        
-        # Choose base domain
-        base_domain = random.choice(list(self.MASTER_EMAILS.keys()))
+        # Choose domain based on realistic market share
+        domains = list(self.MASTER_EMAILS.keys())
+        base_domain = random.choices(domains, weights=self.DOMAIN_WEIGHTS)[0]
         master_email = self.MASTER_EMAILS[base_domain]
         master_account = master_email.split('@')[0]
         
-        # 50/50 chance: name-based vs random username
-        use_name_based = random.random() < 0.5
+        # 60% name-based, 40% random (people usually use their names)
+        use_name_based = random.random() < 0.60
         
         if use_name_based:
-            # Name-based patterns
-            alias = self._generate_name_based_alias(first_name, last_name)
+            alias = self._generate_name_based_alias(first_name, last_name, birth_year)
         else:
-            # Random username patterns
-            alias = self._generate_random_username_alias()
+            alias = self._generate_random_username_alias(birth_year)
         
-        # Construct final email with + aliasing
-        # Format: masteraccount+alias@domain.com
-        final_email = f"{master_account}+{alias}@{base_domain}"
-        
-        return final_email
+        return f"{master_account}+{alias}@{base_domain}"
     
-    def _generate_name_based_alias(self, first_name, last_name):
-        """Generate alias based on actual name"""
-        # Normalize names
-        first_clean = first_name.lower().replace("'", "").replace("-", "")
-        last_clean = last_name.lower().replace("'", "").replace("-", "")
+    def _generate_name_based_alias(self, first_name, last_name, birth_year):
+        """Generate realistic name-based email aliases"""
+        first = first_name.lower().replace("'", "").replace("-", "")
+        last = last_name.lower().replace("'", "").replace("-", "")
         
-        # Random birth year (not older than 30 years)
-        current_year = datetime.now().year
-        birth_year = random.randint(current_year - 30, current_year - 18)  # Ages 18-30
+        # More diverse patterns with realistic weights
+        patterns = [
+            (f"{first}.{last}", 20),                    # john.smith (most common)
+            (f"{first}{last}", 15),                     # johnsmith
+            (f"{first[0]}.{last}", 12),                 # j.smith
+            (f"{first[0]}{last}", 10),                  # jsmith
+            (f"{first}.{last[0]}", 8),                  # john.s
+            (f"{first}_{last}", 7),                     # john_smith
+            (f"{first}.{last}{birth_year % 100}", 6),   # john.smith95
+            (f"{first}{birth_year % 100}", 5),          # john95
+            (f"{last}.{first}", 5),                     # smith.john
+            (f"{last}{first[0]}", 4),                   # smithj
+            (f"{first}{last[0]}", 3),                   # johns
+            (f"{first}.{last}.{birth_year}", 3),        # john.smith.1995
+            (f"{first}_{last}_{birth_year % 100}", 2), # john_smith_95
+        ]
         
-        # Choose pattern
-        pattern = random.choice([
-            f"{first_clean[0]}.{last_clean}",           # j.smith
-            f"{first_clean}.{last_clean}",              # john.smith
-            f"{first_clean}{last_clean}",               # johnsmith
-            f"{first_clean}.{last_clean[0]}",           # john.s
-            f"{first_clean[0]}{last_clean}",            # jsmith
-            f"{first_clean}.{last_clean}.{birth_year}", # john.smith.1995
-            f"{first_clean}{birth_year}",               # john1995
-            f"{last_clean}.{first_clean[0]}",           # smith.j
-        ])
-        
-        return pattern
+        pattern_choices, weights = zip(*patterns)
+        return random.choices(pattern_choices, weights=weights)[0]
     
-    def _generate_random_username_alias(self):
-        """Generate completely random username (no name correlation)"""
+    def _generate_random_username_alias(self, birth_year):
+        """Generate realistic random usernames"""
         
-        # Random birth year (ages 18-30)
-        current_year = datetime.now().year
-        birth_year = random.randint(current_year - 30, current_year - 18)
-        
-        # Random username patterns
         adjectives = [
-            "cool", "happy", "lucky", "super", "fast", "smart", "brave",
-            "wild", "free", "bright", "dark", "silent", "loud", "epic",
-            "mega", "ultra", "swift", "true", "real", "pro"
+            "cool", "happy", "lucky", "super", "fast", "smart", "brave", "wild",
+            "free", "bright", "dark", "silent", "loud", "epic", "mega", "ultra",
+            "swift", "true", "real", "pro", "blue", "red", "golden", "silver",
+            "mad", "crazy", "chill", "lit", "fire", "ice", "shadow", "ghost"
         ]
         
         nouns = [
-            "cat", "dog", "wolf", "bear", "tiger", "eagle", "lion",
-            "dragon", "phoenix", "ninja", "gamer", "rider", "hunter",
-            "king", "queen", "star", "moon", "sun", "sky", "storm"
+            "cat", "dog", "wolf", "bear", "tiger", "eagle", "lion", "dragon",
+            "phoenix", "ninja", "gamer", "rider", "hunter", "warrior", "king",
+            "queen", "star", "moon", "sun", "sky", "storm", "thunder", "blade",
+            "knight", "wizard", "ace", "boss", "chief", "legend", "beast", "fox"
         ]
         
-        pattern_type = random.choice([
-            "adjective_noun_number",
-            "noun_number",
-            "adjective_number",
-            "word_year",
-            "random_chars"
-        ])
+        # More realistic username patterns
+        pattern_type = random.choices(
+            ["adjective_noun_num", "noun_num", "word_year", "word_underscore_num", 
+             "just_word_num", "double_word", "xXwordXx"],
+            weights=[25, 20, 15, 15, 10, 10, 5]
+        )[0]
         
-        if pattern_type == "adjective_noun_number":
-            # coolguy47, happycat92
+        if pattern_type == "adjective_noun_num":
             adj = random.choice(adjectives)
             noun = random.choice(nouns)
-            num = random.randint(10, 99)
+            num = random.randint(1, 999)
             return f"{adj}{noun}{num}"
         
-        elif pattern_type == "noun_number":
-            # tiger2023, dragon88
+        elif pattern_type == "noun_num":
             noun = random.choice(nouns)
-            num = random.choice([random.randint(10, 99), birth_year])
+            num = random.choice([
+                random.randint(1, 99),
+                random.randint(100, 999),
+                birth_year % 100,
+                birth_year
+            ])
             return f"{noun}{num}"
         
-        elif pattern_type == "adjective_number":
-            # lucky77, cool1995
-            adj = random.choice(adjectives)
-            num = random.choice([random.randint(10, 99), birth_year])
-            return f"{adj}{num}"
-        
         elif pattern_type == "word_year":
-            # gamer1998, ninja2001
             word = random.choice(adjectives + nouns)
             return f"{word}{birth_year}"
         
-        else:  # random_chars
-            # random alphanumeric like: user7k3m2
-            chars = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-            return f"user{chars}"
+        elif pattern_type == "word_underscore_num":
+            word = random.choice(adjectives + nouns)
+            num = random.randint(1, 999)
+            return f"{word}_{num}"
+        
+        elif pattern_type == "just_word_num":
+            word = random.choice(adjectives + nouns)
+            num = random.randint(10, 99)
+            return f"{word}{num}"
+        
+        elif pattern_type == "double_word":
+            word1 = random.choice(adjectives + nouns)
+            word2 = random.choice(nouns)
+            return f"{word1}{word2}"
+        
+        else:  # xXwordXx (nostalgic early 2000s style)
+            word = random.choice(adjectives + nouns)
+            return f"xX{word}Xx"
     
     def generate_batch(self, count=10):
         """Generate multiple personas"""
         return [self.generate() for _ in range(count)]
 
 
-# Test function
+# Enhanced test function
 def test_persona_generator():
-    """Test the persona generator and show examples"""
+    """Test the enhanced persona generator"""
     generator = PersonaGenerator()
     
-    print("=" * 70)
-    print("🎭 PERSONA GENERATOR TEST")
-    print("=" * 70)
+    print("=" * 80)
+    print("🎭 ENHANCED REALISTIC PERSONA GENERATOR")
+    print("=" * 80)
     print("\n⚠️  IMPORTANT: Update MASTER_EMAILS in the code with your real emails!")
-    print("-" * 70)
+    print("-" * 80)
     
-    personas = generator.generate_batch(15)
+    personas = generator.generate_batch(20)
     
-    # Separate by type
-    name_based = []
-    random_based = []
+    # Statistics
+    name_based = sum(1 for p in personas if any(
+        p['first'].lower()[:3] in p['email'].split('+')[1].lower() or
+        p['last'].lower()[:3] in p['email'].split('+')[1].lower()
+    ))
+    with_middle = sum(1 for p in personas if p['middle'])
+    with_typos = sum(1 for p in personas if p['has_typo'])
     
-    for persona in personas:
-        # Check if email contains name parts
-        email_local = persona['email'].split('@')[0].split('+')[1]  # Get alias part
-        first_in_email = persona['first'].lower()[:4] in email_local
-        last_in_email = persona['last'].lower()[:4] in email_local
+    # Age distribution
+    ages = [datetime.now().year - p['birth_year'] for p in personas]
+    avg_age = sum(ages) / len(ages)
+    
+    print(f"\n📊 SAMPLE PERSONAS (showing 10 of {len(personas)})")
+    print("-" * 80)
+    
+    for i, persona in enumerate(personas[:10], 1):
+        age = datetime.now().year - persona['birth_year']
+        middle = f" {persona['middle']}." if persona['middle'] else ""
+        typo_flag = " ⚠️ typo" if persona['has_typo'] else ""
         
-        if first_in_email or last_in_email:
-            name_based.append(persona)
-        else:
-            random_based.append(persona)
-    
-    print(f"\n📊 NAME-BASED EMAILS ({len(name_based)} personas)")
-    print("-" * 70)
-    for persona in name_based[:5]:  # Show first 5
-        print(f"   {persona['first']} {persona['last']}")
-        print(f"   → {persona['email']}")
+        print(f"{i:2d}. {persona['first']}{middle} {persona['last']} (age {age}){typo_flag}")
+        print(f"    📧 {persona['email']}")
         print()
     
-    print(f"\n🎲 RANDOM USERNAME EMAILS ({len(random_based)} personas)")
-    print("-" * 70)
-    for persona in random_based[:5]:  # Show first 5
-        print(f"   {persona['first']} {persona['last']}")
-        print(f"   → {persona['email']}")
-        print()
+    print("=" * 80)
+    print(f"✅ GENERATION STATISTICS")
+    print("-" * 80)
+    print(f"   Total personas: {len(personas)}")
+    print(f"   Name-based emails: {name_based} ({name_based/len(personas)*100:.0f}%)")
+    print(f"   Random usernames: {len(personas)-name_based} ({(len(personas)-name_based)/len(personas)*100:.0f}%)")
+    print(f"   With middle initials: {with_middle} ({with_middle/len(personas)*100:.0f}%)")
+    print(f"   With typos: {with_typos} ({with_typos/len(personas)*100:.0f}%)")
+    print(f"   Average age: {avg_age:.0f} years old")
+    print("=" * 80)
     
-    print("=" * 70)
-    print(f"✅ Generated {len(personas)} personas successfully!")
-    print(f"   Name-based: {len(name_based)} (~50% expected)")
-    print(f"   Random: {len(random_based)} (~50% expected)")
-    print("=" * 70)
-    
-    # Show routing explanation
-    print("\n📮 EMAIL ROUTING EXPLANATION:")
-    print("-" * 70)
-    print("All emails use '+' aliasing, which routes to your master account:")
+    print("\n📮 EMAIL ROUTING (+ Aliasing)")
+    print("-" * 80)
+    print("All emails route to your master accounts:")
     print()
-    print("Example:")
     print("  masteraccount+john.smith@gmail.com  → masteraccount@gmail.com")
-    print("  masteraccount+coolguy47@gmail.com   → masteraccount@gmail.com")
+    print("  masteraccount+coolcat47@outlook.com → masteraccount@outlook.com")
     print()
-    print("The website sees different emails, but YOU receive all messages!")
-    print("=" * 70)
+    print("🎯 Websites see unique emails, but YOU receive everything!")
+    print("=" * 80)
 
 if __name__ == "__main__":
     test_persona_generator()
