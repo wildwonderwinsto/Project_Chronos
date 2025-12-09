@@ -1,6 +1,8 @@
 import os
+import sys
 import threading
 import asyncio
+import io
 from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
@@ -23,16 +25,63 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 TIMEZONE = pytz.timezone('America/New_York')
 
-# Store for live logs (in-memory)
+# ==========================================
+# 🔌 LOGGING INTERCEPTOR (The Magic Part)
+# ==========================================
 live_logs = []
 MAX_LIVE_LOGS = 100
 
-# Global flag to ensure scheduler only starts once
+class LoggerInterceptor(io.StringIO):
+    """
+    Catches all 'print' statements.
+    1. Sends them to the Render Console (so you see them in Deployment logs).
+    2. Saves them to 'live_logs' (so you see them in Dashboard).
+    """
+    def write(self, message):
+        # 1. Write to standard Render console
+        sys.__stdout__.write(message)
+        sys.__stdout__.flush()
+        
+        # 2. Add to Dashboard list (ignore empty newlines)
+        if message and message.strip():
+            current_time = datetime.now(TIMEZONE).isoformat()
+            
+            # Determine log level based on content
+            level = 'INFO'
+            if '❌' in message or 'ERROR' in message or 'Exception' in message:
+                level = 'ERROR'
+            elif '⚠️' in message or 'WARNING' in message:
+                level = 'WARNING'
+            elif '✅' in message or 'SUCCESS' in message:
+                level = 'SUCCESS'
+            
+            log_entry = {
+                'timestamp': current_time,
+                'message': message.strip(),
+                'level': level
+            }
+            
+            live_logs.append(log_entry)
+            
+            # Keep list size manageable
+            if len(live_logs) > MAX_LIVE_LOGS:
+                live_logs.pop(0)
+
+    def flush(self):
+        sys.__stdout__.flush()
+
+# Redirect Python's "print" to our Interceptor
+sys.stdout = LoggerInterceptor()
+
+# ==========================================
+# 🤖 SCHEDULER BACKGROUND WORKER
+# ==========================================
 scheduler_started = False
 
 def run_scheduler_loop():
     """Function to run the async scheduler in a separate thread"""
-    print("🚀 Background Scheduler Thread Started")
+    print(f"🚀 Background Scheduler Thread Started at {datetime.now(TIMEZONE)}")
+    
     # Create a new event loop for this thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -41,7 +90,10 @@ def run_scheduler_loop():
     scheduler = ChronoScheduler(use_proxies=True, manual_captcha=False)
     
     # Run it
-    loop.run_until_complete(scheduler.run())
+    try:
+        loop.run_until_complete(scheduler.run())
+    except Exception as e:
+        print(f"❌ Scheduler Thread Crashed: {e}")
 
 def start_background_worker():
     """Starts the scheduler thread"""
@@ -50,6 +102,10 @@ def start_background_worker():
         scheduler_started = True
         thread = threading.Thread(target=run_scheduler_loop, daemon=True)
         thread.start()
+
+# ==========================================
+# 🌐 FLASK ROUTES
+# ==========================================
 
 @app.route('/')
 def dashboard():
@@ -64,11 +120,9 @@ def get_stats():
         status_result = supabase.table('bot_status').select('*').limit(1).execute()
         bot_status = status_result.data[0] if status_result.data else {}
         
-        # Get total counts from attempt_logs
+        # Get total counts from attempt_logs (simple count)
         logs = supabase.table('attempt_logs').select('status', count='exact').execute()
         
-        # Note: Efficient counting depends on Supabase policy, this is simple fetch
-        # For large DBs, consider creating a summary table or using SQL count
         total_attempts = len(logs.data)
         successes = len([l for l in logs.data if l['status'] == 'SUCCESS'])
         failures = len([l for l in logs.data if l['status'] == 'FAILED'])
@@ -83,8 +137,6 @@ def get_stats():
             .execute()
         
         recent_successes = len([l for l in recent.data if l['status'] == 'SUCCESS'])
-        
-        # Calculate entries per hour (last 24h)
         entries_per_hour = len(recent.data) / 24.0
         
         return jsonify({
@@ -104,17 +156,17 @@ def get_stats():
         })
     
     except Exception as e:
+        print(f"⚠️ Stats Error: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/recent-logs')
 def get_recent_logs():
-    """Get recent attempt logs"""
+    """Get recent attempt logs from DB"""
     try:
-        limit = 50
         logs = supabase.table('attempt_logs')\
             .select('*')\
             .order('timestamp', desc=True)\
-            .limit(limit)\
+            .limit(50)\
             .execute()
         return jsonify({'logs': logs.data})
     except Exception as e:
@@ -122,7 +174,7 @@ def get_recent_logs():
 
 @app.route('/api/hourly-chart')
 def get_hourly_chart():
-    """Get data for hourly activity chart (last 24 hours)"""
+    """Get data for chart"""
     try:
         yesterday = (datetime.now(TIMEZONE) - timedelta(days=1)).isoformat()
         logs = supabase.table('attempt_logs')\
@@ -133,10 +185,14 @@ def get_hourly_chart():
         
         hourly_data = {}
         for log in logs.data:
-            timestamp = datetime.fromisoformat(log['timestamp'].replace('Z', '+00:00'))
+            # Handle potential Z format or missing +00:00
+            ts_str = log['timestamp'].replace('Z', '+00:00')
+            timestamp = datetime.fromisoformat(ts_str)
             hour_key = timestamp.strftime('%Y-%m-%d %H:00')
+            
             if hour_key not in hourly_data:
                 hourly_data[hour_key] = {'total': 0, 'success': 0, 'failed': 0}
+            
             hourly_data[hour_key]['total'] += 1
             if log['status'] == 'SUCCESS':
                 hourly_data[hour_key]['success'] += 1
@@ -154,7 +210,7 @@ def get_hourly_chart():
 
 @app.route('/api/proxy-stats')
 def get_proxy_stats():
-    """Get proxy usage statistics"""
+    """Get proxy usage"""
     try:
         logs = supabase.table('attempt_logs')\
             .select('proxy_ip, proxy_city, proxy_state, status')\
@@ -166,25 +222,22 @@ def get_proxy_stats():
             ip = log.get('proxy_ip', 'Unknown')
             if ip not in proxy_usage:
                 proxy_usage[ip] = {
-                    'ip': ip,
-                    'city': log.get('proxy_city', 'Unknown'),
+                    'ip': ip, 
+                    'city': log.get('proxy_city', 'Unknown'), 
                     'state': log.get('proxy_state', 'Unknown'),
                     'total': 0, 'success': 0, 'failed': 0
                 }
             proxy_usage[ip]['total'] += 1
-            if log['status'] == 'SUCCESS':
-                proxy_usage[ip]['success'] += 1
-            elif log['status'] == 'FAILED':
-                proxy_usage[ip]['failed'] += 1
+            if log['status'] == 'SUCCESS': proxy_usage[ip]['success'] += 1
+            elif log['status'] == 'FAILED': proxy_usage[ip]['failed'] += 1
         
-        proxy_list = sorted(proxy_usage.values(), key=lambda x: x['total'], reverse=True)
-        return jsonify({'proxies': proxy_list[:20]})
+        return jsonify({'proxies': sorted(proxy_usage.values(), key=lambda x: x['total'], reverse=True)[:20]})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/search-logs')
 def search_logs():
-    """Search logs with filters"""
+    """Search logs"""
     try:
         status = request.args.get('status')
         search = request.args.get('search')
@@ -204,38 +257,36 @@ def clear_database():
         password = data.get('password')
         if password != os.getenv('ADMIN_PASSWORD', 'chronos2025'):
             return jsonify({'error': 'Invalid password'}), 403
+        
         supabase.table('attempt_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
         supabase.table('bot_status').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
         supabase.table('bot_status').insert({
             'status': 'PAUSED', 'current_mode': 'DAY',
             'total_attempts': 0, 'total_successes': 0, 'total_failures': 0, 'consecutive_failures': 0
         }).execute()
+        
+        print("⚠️ DATABASE CLEARED BY ADMIN")
         return jsonify({'success': True, 'message': 'Database cleared successfully'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/live-logs')
 def get_live_logs():
+    """Get live terminal logs (intercepted from stdout)"""
     return jsonify({'logs': live_logs[-100:]})
 
 @app.route('/api/add-log', methods=['POST'])
 def add_live_log():
+    """Endpoint to manually add logs (if needed)"""
     try:
         data = request.get_json()
-        log_entry = {
-            'timestamp': datetime.now(TIMEZONE).isoformat(),
-            'message': data.get('message', ''),
-            'level': data.get('level', 'INFO')
-        }
-        live_logs.append(log_entry)
-        if len(live_logs) > MAX_LIVE_LOGS:
-            live_logs.pop(0)
+        print(f"[{data.get('level', 'INFO')}] {data.get('message', '')}")
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # START THE SCHEDULER IN BACKGROUND
+    # START THE SCHEDULER
     start_background_worker()
     
     # Production WSGI server
