@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: ProjectChronos
+    env: docker
+    plan: free
+    region: virginia  # or oregon, frankfurt, etc.
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: ENVIRONMENT
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: PORT
+        value: 8080
+      - key: PYTHONUNBUFFERED
+        value: "true"
