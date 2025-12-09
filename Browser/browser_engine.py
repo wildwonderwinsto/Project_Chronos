@@ -185,7 +185,6 @@ class BrowserEngine:
                 context = await browser.new_context(**context_options)
                 
                 # Inject stealth scripts - COMBINED into one init script
-               # Inject stealth scripts - COMBINED into one init script
                 await context.add_init_script("""
                     // Remove webdriver flag
                     Object.defineProperty(navigator, 'webdriver', {
@@ -236,27 +235,8 @@ class BrowserEngine:
                     print(f"   🧹 Cleared all storage and cookies")
                 except Exception as e:
                     print(f"   ℹ️  Storage clearing not available: {e}")
-
-                # Debug: Check what's in localStorage
-                try:
-                    stored_data = await page.evaluate("""
-                        () => {
-                            try {
-                                return {
-                                    localStorage: Object.keys(localStorage).length > 0 ? JSON.stringify(localStorage) : 'empty',
-                                    cookies: document.cookie || 'empty',
-                                    comp_388: localStorage.getItem('comp_388')
-                                }
-                            } catch (e) {
-                                return { error: e.toString() }
-                            }
-                        }
-                    """)
-                    print(f"   🔍 Storage check: {stored_data}")
-                except Exception as e:
-                    print(f"   ℹ️  Storage check not available: {e}")         
            
-                # Open the form (don't check localStorage before opening - it's set AFTER submission)
+                # Open the form
                 if not await self._open_form(page):
                     raise Exception("Failed to open form")
                 
@@ -281,24 +261,22 @@ class BrowserEngine:
                 print(f"   🎯 Completing social actions...")
                 await self.social_handler.handle_actions(page)
 
-                # Check if CAPTCHA changed after social actions
+                # IMPORTANT: Verify CAPTCHA is still valid after social actions
                 print(f"   🔍 Verifying CAPTCHA still valid...")
-                try:
-                    current_captcha = await page.input_value(FORM_SELECTORS['captcha'])
-                    if not current_captcha or len(current_captcha) == 0:
-                        print(f"   ⚠️  CAPTCHA cleared after social actions, re-solving...")
-                        captcha_solved = await self.captcha_solver.solve(page, log_id)
-                        
-                        if not captcha_solved:
-                            print(f"   ❌ CAPTCHA re-solve failed")
-                            if not self.test_mode:
-                                screenshot = await self.screenshot_manager.capture(page, log_id)
-                                await self.db_logger.log_failure(log_id, "CAPTCHA_RESET_FAILED", screenshot)
-                            await context.close()
-                            await browser.close()
-                            return False, log_id
-                except Exception as e:
-                    print(f"   ℹ️  Could not verify CAPTCHA: {e}")
+                captcha_still_valid = await self._verify_captcha_filled(page)
+                
+                if not captcha_still_valid:
+                    print(f"   ⚠️  CAPTCHA cleared after social actions, re-solving...")
+                    captcha_solved = await self.captcha_solver.solve(page, log_id)
+                    
+                    if not captcha_solved:
+                        print(f"   ❌ CAPTCHA re-solve failed")
+                        if not self.test_mode:
+                            screenshot = await self.screenshot_manager.capture(page, log_id)
+                            await self.db_logger.log_failure(log_id, "CAPTCHA_RESET_FAILED", screenshot)
+                        await context.close()
+                        await browser.close()
+                        return False, log_id
                 
                 # TEST MODE: Stop before submission
                 if self.test_mode:
@@ -351,19 +329,6 @@ class BrowserEngine:
         print(f"   Name: {name}")
         print(f"   Email: {email}")
     
-    async def _check_already_entered(self, page):
-        """Check if already entered via localStorage (only after submission)"""
-        already_entered = await page.evaluate('''
-            () => {
-                return localStorage.getItem("comp_388") !== null;
-            }
-        ''')
-        
-        if already_entered:
-            print(f"   ⚠️  Browser context shows already entered (localStorage)")
-        
-        return already_entered
-    
     async def _open_form(self, page):
         """Click Start button to reveal form"""
         try:
@@ -401,6 +366,18 @@ class BrowserEngine:
             
         except Exception as e:
             print(f"   ❌ Failed to open form: {str(e)}")
+            return False
+    
+    async def _verify_captcha_filled(self, page):
+        """Verify that CAPTCHA field still has a value"""
+        try:
+            current_captcha = await page.input_value(FORM_SELECTORS['captcha'])
+            is_filled = current_captcha and len(current_captcha) >= 3
+            if is_filled:
+                print(f"      ✅ CAPTCHA still valid: '{current_captcha}'")
+            return is_filled
+        except Exception as e:
+            print(f"      ⚠️  Could not verify CAPTCHA: {e}")
             return False
     
     async def _submit_and_verify(self, page):

@@ -1,6 +1,8 @@
 """
 Configuration file for Project Chronos
 """
+from datetime import datetime
+import pytz
 
 TARGET_URL = "https://prod-giveaways.corsair.com/compo/embed/388/"
 
@@ -59,39 +61,46 @@ AGE_RANGE = {
 }
 
 # ===== SCHEDULING CONFIGURATION =====
+# Automatically get today's date for start
+_TODAY = datetime.now(pytz.timezone('America/New_York')).strftime("%Y-%m-%d")
+
 SCHEDULING = {
     # Absolute termination date
     "termination_date": "2025-12-31",
     "termination_time": "23:59:59",
     
+    # AUTOMATICALLY USE TODAY'S DATE
+    "ramp_start_date": _TODAY,  # ✅ AUTO-UPDATES TO TODAY!
+    
     # Day/Night modes (EST)
     "day_start_hour": 8,    # 8 AM EST
     "day_end_hour": 23,     # 11 PM EST
     
-    # Base frequency (entries per hour)
-    "day_mode_base_frequency": 2.0,      # 2 entries/hour during day
-    "night_mode_base_frequency": 0.5,    # 0.5 entries/hour at night
+    # ===== INCREASED BASE FREQUENCY FOR MORE ENTRIES =====
+    # OLD: 2.0/hr day, 0.5/hr night = ~19,000 total entries
+    # NEW: 4.0/hr day, 1.0/hr night = ~38,000 total entries
+    "day_mode_base_frequency": 4.0,      # 4 entries/hour during day (was 2.0)
+    "night_mode_base_frequency": 1.0,    # 1 entry/hour at night (was 0.5)
     
     # Volume ramp-up settings
-    "ramp_start_date": "2024-12-06",     # Start date (today)
     "casual_multiplier": 1.0,            # Multiply base frequency by this at start
-    "aggressive_multiplier": 4.0,        # Multiply base frequency by this near deadline
-    "final_day_multiplier": 4.0,         # Extra boost on last day
+    "aggressive_multiplier": 5.0,        # Multiply base frequency by this near deadline (was 4.0)
+    "final_day_multiplier": 6.0,         # Extra boost on last day (was 4.0)
     
     # Weekend boost
-    "weekend_multiplier": 1.2,           # 20% more on weekends
+    "weekend_multiplier": 1.3,           # 30% more on weekends (was 1.2)
     
     # Stochastic jitter (randomness)
     "jitter_min_factor": 0.5,            # Minimum timing (50% of calculated)
     "jitter_max_factor": 1.5,            # Maximum timing (150% of calculated)
     
     # Panic mode (cool-down after failures)
-    "panic_failure_threshold": 10,       # Trigger panic after 10 consecutive failures
+    "panic_failure_threshold": 5,        # Trigger panic after 5 consecutive failures (was 10)
     "panic_cooldown_minutes": 60,        # Sleep for 60-120 minutes in panic mode
     "panic_cooldown_max_minutes": 120,
     
     # Retry settings
-    "max_retries_per_attempt": 3,        # Retry failed attempts up to 3 times
+    "max_retries_per_attempt": 5,        # Retry failed attempts up to 5 times (was 3)
     "retry_delay_minutes": 5,            # Wait 5 minutes between retries
 }
 
