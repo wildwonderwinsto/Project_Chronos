@@ -9,15 +9,41 @@ class PersonaGenerator:
     """Generates highly realistic, internally consistent fake identities"""
     
     # Master email accounts (weighted by real-world usage)
+    # ✅ ENABLED emails will be used for persona generation
+    # ❌ DISABLED emails are commented out but can be re-enabled anytime
     MASTER_EMAILS = {
-        "gmail.com": "",      # Replace with your actual Gmail (60% market share)
-        "outlook.com": "",    # Replace with your actual Outlook (15%)
-        "yahoo.com": "",      # Replace with your actual Yahoo (10%)
-        "icloud.com": "",     # Replace with your actual iCloud (10%)
-        "protonmail.com": "", # Replace with your actual ProtonMail (5%)
+        # ✅ ACTIVE MASTER EMAIL
+        "outlook.com": "UsersMaiI",      # Your primary email
+        
+        # ❌ DISABLED - Uncomment to re-enable
+        # "gmail.com": "",                # Uncomment and add your Gmail
+        # "yahoo.com": "",                # Uncomment and add your Yahoo
+        # "icloud.com": "",               # Uncomment and add your iCloud
+        # "protonmail.com": "",           # Uncomment and add your ProtonMail
     }
     
-    DOMAIN_WEIGHTS = [60, 15, 10, 10, 5]  # Probability weights for each domain
+    # Domain weights - automatically calculated from enabled emails
+    # This will dynamically adjust based on which emails are enabled
+    @classmethod
+    def _get_active_domains(cls):
+        """Get only the domains that have email addresses configured"""
+        return {domain: email for domain, email in cls.MASTER_EMAILS.items() if email}
+    
+    @classmethod
+    def _get_domain_weights(cls):
+        """Generate weights based on number of active domains"""
+        active = cls._get_active_domains()
+        num_active = len(active)
+        
+        if num_active == 0:
+            raise ValueError("No master emails configured! Please add at least one email address.")
+        
+        # Equal weight distribution if only one domain
+        if num_active == 1:
+            return [100]
+        
+        # Distribute weights evenly across active domains
+        return [100 // num_active] * num_active
     
     # Enhanced typo patterns
     TYPO_MAP = {
@@ -78,6 +104,11 @@ class PersonaGenerator:
     
     def generate(self):
         """Generate a complete persona with realistic variations"""
+        
+        # Verify at least one email is configured
+        active_domains = self._get_active_domains()
+        if not active_domains:
+            raise ValueError("No master emails configured! Please add at least one email address in MASTER_EMAILS.")
         
         # Step 1: Generate core identity
         first_name = self.fake.first_name()
@@ -179,11 +210,14 @@ class PersonaGenerator:
     def _generate_email(self, first_name, last_name, birth_year):
         """Generate realistic email with proper domain distribution"""
         
-        # Choose domain based on realistic market share
-        domains = list(self.MASTER_EMAILS.keys())
-        base_domain = random.choices(domains, weights=self.DOMAIN_WEIGHTS)[0]
-        master_email = self.MASTER_EMAILS[base_domain]
-        master_account = master_email.split('@')[0]
+        # Get active domains and weights
+        active_domains = self._get_active_domains()
+        domains = list(active_domains.keys())
+        weights = self._get_domain_weights()
+        
+        # Choose domain based on weights
+        base_domain = random.choices(domains, weights=weights)[0]
+        master_account = active_domains[base_domain]
         
         # 60% name-based, 40% random (people usually use their names)
         use_name_based = random.random() < 0.60
@@ -296,7 +330,18 @@ def test_persona_generator():
     print("=" * 80)
     print("🎭 ENHANCED REALISTIC PERSONA GENERATOR")
     print("=" * 80)
-    print("\n⚠️  IMPORTANT: Update MASTER_EMAILS in the code with your real emails!")
+    
+    # Show active configuration
+    active_domains = generator._get_active_domains()
+    print(f"\n✅ ACTIVE MASTER EMAILS:")
+    print("-" * 80)
+    for domain, account in active_domains.items():
+        print(f"   • {account}@{domain}")
+    
+    disabled_count = len(generator.MASTER_EMAILS) - len(active_domains)
+    if disabled_count > 0:
+        print(f"\n❌ DISABLED: {disabled_count} email(s) (can be re-enabled in code)")
+    
     print("-" * 80)
     
     personas = generator.generate_batch(20)
@@ -338,10 +383,10 @@ def test_persona_generator():
     
     print("\n📮 EMAIL ROUTING (+ Aliasing)")
     print("-" * 80)
-    print("All emails route to your master accounts:")
+    print("All emails route to your master account:")
     print()
-    print("  masteraccount+john.smith@gmail.com  → masteraccount@gmail.com")
-    print("  masteraccount+coolcat47@outlook.com → masteraccount@outlook.com")
+    for domain, account in active_domains.items():
+        print(f"  {account}+john.smith@{domain}  → {account}@{domain}")
     print()
     print("🎯 Websites see unique emails, but YOU receive everything!")
     print("=" * 80)
