@@ -1,3 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Chronos Dashboard</title>
+    
+    <!-- 1. Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- 3. Custom Styles for non-Tailwind elements -->
+    <style>
+        body {
+            background-color: #111827; /* gray-900 */
+            color: #f3f4f6; /* gray-100 */
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Card Styling */
+        .stat-card {
+            background-color: #1f2937; /* gray-800 */
+            border: 1px solid #374151; /* gray-700 */
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+        }
+
+        /* Tab Buttons */
+        .tab-button {
+            padding: 0.75rem 1.5rem;
+            color: #9ca3af; /* gray-400 */
+            font-weight: 500;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        .tab-button:hover {
+            color: #e5e7eb; /* gray-200 */
+            background-color: #374151; /* gray-700 */
+        }
+        .tab-button.active {
+            color: #3b82f6; /* blue-500 */
+            border-bottom-color: #3b82f6;
+            background-color: rgba(59, 130, 246, 0.1);
+        }
+
+        /* Status Indicators */
+        .status-dot {
+            height: 12px;
+            width: 12px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .status-running {
+            background-color: #22c55e; /* green-500 */
+            box-shadow: 0 0 10px #22c55e;
+            animation: pulse 2s infinite;
+        }
+        .status-paused {
+            background-color: #eab308; /* yellow-500 */
+        }
+        .status-panic {
+            background-color: #ef4444; /* red-500 */
+            animation: flash 1s infinite;
+        }
+
+        /* Terminal Styling */
+        .log-terminal {
+            background-color: #000;
+            color: #22c55e;
+            font-family: 'Courier New', Courier, monospace;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #374151;
+        }
+        .log-line {
+            margin-bottom: 0.25rem;
+            font-size: 0.875rem;
+        }
+        .log-ERROR { color: #ef4444; }
+        .log-WARN { color: #eab308; }
+
+        /* Animations */
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .updated {
+            animation: highlight 0.5s ease-out;
+        }
+        
+        @keyframes highlight {
+            0% { color: #3b82f6; transform: scale(1.1); }
+            100% { color: inherit; transform: scale(1); }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+
 <!-- Header -->
 <div class="bg-gray-800 shadow-lg">
     <div class="max-w-7xl mx-auto px-4 py-6">
