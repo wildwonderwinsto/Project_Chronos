@@ -1,253 +1,249 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project Chronos - Dashboard</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        body { font-family: 'Inter', -apple-system, sans-serif; }
-        .stat-card { 
-            background-color: #1f2937;
-            border-radius: 0.5rem;
-            padding: 1.5rem;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-        }
-        .status-dot {
-            display: inline-block;
-            width: 0.75rem;
-            height: 0.75rem;
-            border-radius: 9999px;
-        }
-        .status-running { background-color: #10b981; }
-        .status-paused { background-color: #eab308; }
-        .status-panic { background-color: #ef4444; }
-        .log-terminal {
-            background: #0f172a;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            max-height: 400px;
-            overflow-y: auto;
-            padding: 1rem;
-            border-radius: 0.5rem;
-        }
-        .log-line {
-            margin: 2px 0;
-            padding: 2px 4px;
-        }
-        .log-INFO { color: #94a3b8; }
-        .log-SUCCESS { color: #22c55e; }
-        .log-WARNING { color: #eab308; }
-        .log-ERROR { color: #ef4444; }
-        .tab-button {
-            padding: 0.75rem 1.5rem;
-            border-bottom: 2px solid transparent;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .tab-button.active {
-            border-bottom-color: #3b82f6;
-            color: #3b82f6;
-        }
-    </style>
-</head>
-<body class="bg-gray-900 text-white">
+<!-- Header -->
+<div class="bg-gray-800 shadow-lg">
+    <div class="max-w-7xl mx-auto px-4 py-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-3xl font-bold">⏰ Project Chronos <span class="update-indicator"></span></h1>
+                <p class="text-gray-400 text-sm mt-1">Automated Entry System - Real-Time Updates</p>
+            </div>
+            <div class="text-right">
+                <div class="flex items-center gap-2">
+                    <span class="status-dot status-running" id="status-indicator"></span>
+                    <span id="bot-status" class="text-lg font-semibold">LOADING...</span>
+                </div>
+                <p class="text-gray-400 text-sm" id="current-mode">-</p>
+                <p class="text-xs text-gray-500 mt-1">Updates every 2 seconds</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tabs -->
+<div class="bg-gray-800 border-b border-gray-700">
+    <div class="max-w-7xl mx-auto px-4">
+        <div class="flex space-x-1">
+            <button class="tab-button active" onclick="switchTab('overview')">📊 Overview</button>
+            <button class="tab-button" onclick="switchTab('logs')">📜 Detailed Logs</button>
+            <button class="tab-button" onclick="switchTab('terminal')">💻 Live Terminal</button>
+            <button class="tab-button" onclick="switchTab('admin')">⚙️ Admin</button>
+        </div>
+    </div>
+</div>
+
+<!-- Tab Content -->
+<div class="max-w-7xl mx-auto px-4 py-8">
     
-    <!-- Header -->
-    <div class="bg-gray-800 shadow-lg">
-        <div class="max-w-7xl mx-auto px-4 py-6">
-            <div class="flex items-center justify-between">
-                <div>
-                    <h1 class="text-3xl font-bold">⏰ Project Chronos</h1>
-                    <p class="text-gray-400 text-sm mt-1">Automated Entry System</p>
-                </div>
-                <div class="text-right">
-                    <div class="flex items-center gap-2">
-                        <span class="status-dot status-running" id="status-indicator"></span>
-                        <span id="bot-status" class="text-lg font-semibold">LOADING...</span>
-                    </div>
-                    <p class="text-gray-400 text-sm" id="current-mode">-</p>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Tabs -->
-    <div class="bg-gray-800 border-b border-gray-700">
-        <div class="max-w-7xl mx-auto px-4">
-            <div class="flex space-x-1">
-                <button class="tab-button active" onclick="switchTab('overview')">📊 Overview</button>
-                <button class="tab-button" onclick="switchTab('logs')">📜 Detailed Logs</button>
-                <button class="tab-button" onclick="switchTab('terminal')">💻 Live Terminal</button>
-                <button class="tab-button" onclick="switchTab('admin')">⚙️ Admin</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Tab Content -->
-    <div class="max-w-7xl mx-auto px-4 py-8">
+    <!-- OVERVIEW TAB -->
+    <div id="tab-overview">
         
-        <!-- OVERVIEW TAB -->
-        <div id="tab-overview">
+        <!-- Stats Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             
-            <!-- Stats Grid -->
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-                
-                <div class="stat-card">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-gray-400 text-sm uppercase">Total Attempts</p>
-                            <p class="text-4xl font-bold mt-2" id="total-attempts">-</p>
-                        </div>
-                        <div class="text-5xl">🎯</div>
+            <div class="stat-card" id="card-attempts">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-400 text-sm uppercase">Total Attempts</p>
+                        <p class="text-4xl font-bold mt-2 stat-value" id="total-attempts">-</p>
                     </div>
+                    <div class="text-5xl">🎯</div>
                 </div>
-
-                <div class="stat-card">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-gray-400 text-sm uppercase">Success Rate</p>
-                            <p class="text-4xl font-bold mt-2 text-green-400" id="success-rate">-</p>
-                        </div>
-                        <div class="text-5xl">✅</div>
-                    </div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-gray-400 text-sm uppercase">Last 24 Hours</p>
-                            <p class="text-4xl font-bold mt-2" id="entries-24h">-</p>
-                        </div>
-                        <div class="text-5xl">📊</div>
-                    </div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-gray-400 text-sm uppercase">Entries/Hour</p>
-                            <p class="text-4xl font-bold mt-2 text-blue-400" id="entries-per-hour">-</p>
-                        </div>
-                        <div class="text-5xl">⚡</div>
-                    </div>
-                </div>
-
             </div>
 
-            <!-- Chart -->
-            <div class="stat-card mb-8">
-                <h2 class="text-xl font-bold mb-4">📈 Activity (Last 24 Hours)</h2>
-                <canvas id="activityChart" height="80"></canvas>
+            <div class="stat-card" id="card-success">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-400 text-sm uppercase">Success Rate</p>
+                        <p class="text-4xl font-bold mt-2 text-green-400 stat-value" id="success-rate">-</p>
+                    </div>
+                    <div class="text-5xl">✅</div>
+                </div>
             </div>
 
-            <!-- Two Column Layout -->
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div class="stat-card" id="card-24h">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-400 text-sm uppercase">Last 24 Hours</p>
+                        <p class="text-4xl font-bold mt-2 stat-value" id="entries-24h">-</p>
+                    </div>
+                    <div class="text-5xl">📊</div>
+                </div>
+            </div>
+
+            <div class="stat-card" id="card-frequency">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-400 text-sm uppercase">Entries/Hour</p>
+                        <p class="text-4xl font-bold mt-2 text-blue-400 stat-value" id="entries-per-hour">-</p>
+                    </div>
+                    <div class="text-5xl">⚡</div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Chart -->
+        <div class="stat-card mb-8">
+            <h2 class="text-xl font-bold mb-4">📈 Activity (Last 24 Hours) - Live Updates</h2>
+            <canvas id="activityChart" height="80"></canvas>
+        </div>
+
+        <!-- Two Column Layout -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            
+            <!-- Recent Logs -->
+            <div class="stat-card">
+                <h2 class="text-xl font-bold mb-4">📜 Recent Attempts <span class="text-xs text-gray-400">(Auto-refreshing)</span></h2>
+                <div class="space-y-2 max-h-96 overflow-y-auto" id="recent-logs">
+                    <p class="text-gray-400 text-center py-8">Loading...</p>
+                </div>
+            </div>
+
+            <!-- System Info -->
+            <div class="space-y-4">
                 
-                <!-- Recent Logs -->
                 <div class="stat-card">
-                    <h2 class="text-xl font-bold mb-4">📜 Recent Attempts</h2>
-                    <div class="space-y-2 max-h-96 overflow-y-auto" id="recent-logs">
-                        <p class="text-gray-400 text-center py-8">Loading...</p>
+                    <h2 class="text-xl font-bold mb-4">🤖 Bot Status <span class="text-xs text-gray-400">(Live)</span></h2>
+                    <div class="space-y-3">
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Status</span>
+                            <span class="font-semibold" id="bot-status-detail">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Mode</span>
+                            <span class="font-semibold" id="current-mode-detail">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Consecutive Failures</span>
+                            <span class="font-semibold text-red-400" id="consecutive-failures">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Target Frequency</span>
+                            <span class="font-semibold" id="target-frequency">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Next Run</span>
+                            <span class="font-semibold text-blue-400" id="next-run">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Last Attempt</span>
+                            <span class="font-semibold" id="last-attempt">-</span>
+                        </div>
                     </div>
                 </div>
 
-                <!-- System Info -->
-                <div class="space-y-4">
-                    
-                    <div class="stat-card">
-                        <h2 class="text-xl font-bold mb-4">🤖 Bot Status</h2>
-                        <div class="space-y-3">
-                            <div class="flex justify-between">
-                                <span class="text-gray-400">Status</span>
-                                <span class="font-semibold" id="bot-status-detail">-</span>
-                            </div>
-                            <div class="flex justify-between">
-                                <span class="text-gray-400">Mode</span>
-                                <span class="font-semibold" id="current-mode-detail">-</span>
-                            </div>
-                            <div class="flex justify-between">
-                                <span class="text-gray-400">Consecutive Failures</span>
-                                <span class="font-semibold text-red-400" id="consecutive-failures">-</span>
-                            </div>
-                            <div class="flex justify-between">
-                                <span class="text-gray-400">Target Frequency</span>
-                                <span class="font-semibold" id="target-frequency">-</span>
-                            </div>
-                            <div class="flex justify-between">
-                                <span class="text-gray-400">Next Run</span>
-                                <span class="font-semibold text-blue-400" id="next-run">-</span>
-                            </div>
-                            <div class="flex justify-between">
-                                <span class="text-gray-400">Last Attempt</span>
-                                <span class="font-semibold" id="last-attempt">-</span>
-                            </div>
+                <div class="stat-card">
+                    <h2 class="text-xl font-bold mb-4">📊 Overall Stats</h2>
+                    <div class="space-y-3">
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Total Successes</span>
+                            <span class="font-semibold text-green-400 stat-value" id="total-successes">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Total Failures</span>
+                            <span class="font-semibold text-red-400 stat-value" id="total-failures">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-400">Successes (24h)</span>
+                            <span class="font-semibold text-green-400 stat-value" id="successes-24h">-</span>
                         </div>
                     </div>
-
-                    <div class="stat-card">
-                        <h2 class="text-xl font-bold mb-4">📊 Overall Stats</h2>
-                        <div class="space-y-3">
-                            <div class="flex justify-between">
-                                <span class="text-gray-400">Total Successes</span>
-                                <span class="font-semibold text-green-400" id="total-successes">-</span>
-                            </div>
-                            <div class="flex justify-between">
-                                <span class="text-gray-400">Total Failures</span>
-                                <span class="font-semibold text-red-400" id="total-failures">-</span>
-                            </div>
-                            <div class="flex justify-between">
-                                <span class="text-gray-400">Successes (24h)</span>
-                                <span class="font-semibold text-green-400" id="successes-24h">-</span>
-                            </div>
-                        </div>
-                    </div>
-
                 </div>
 
             </div>
 
         </div>
 
-        <!-- DETAILED LOGS TAB -->
-        <div id="tab-logs" class="hidden">
+    </div>
+
+    <!-- DETAILED LOGS TAB -->
+    <div id="tab-logs" class="hidden">
+        
+        <!-- Search & Filters -->
+        <div class="stat-card mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <input type="text" id="search-input" placeholder="Search by name or email..." 
+                       class="bg-gray-700 text-white px-4 py-2 rounded">
+                <select id="status-filter" class="bg-gray-700 text-white px-4 py-2 rounded">
+                    <option value="">All Statuses</option>
+                    <option value="SUCCESS">Success Only</option>
+                    <option value="FAILED">Failed Only</option>
+                    <option value="INITIATED">Initiated Only</option>
+                </select>
+                <button onclick="searchLogs()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded font-semibold">
+                    🔍 Search
+                </button>
+            </div>
+        </div>
+
+        <!-- Logs Table -->
+        <div class="stat-card">
+            <h2 class="text-xl font-bold mb-4">All Attempts (<span id="log-count">0</span>) <span class="text-xs text-gray-400">Auto-updates every 5s</span></h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-gray-400 border-b border-gray-700">
+                            <th class="text-left py-2">Time</th>
+                            <th class="text-left py-2">Name</th>
+                            <th class="text-left py-2">Email</th>
+                            <th class="text-center py-2">Status</th>
+                            <th class="text-left py-2">Proxy Location</th>
+                            <th class="text-left py-2">Error</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logs-table">
+                        <tr>
+                            <td colspan="6" class="text-center text-gray-400 py-8">Loading...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- LIVE TERMINAL TAB -->
+    <div id="tab-terminal" class="hidden">
+        <div class="stat-card">
+            <h2 class="text-xl font-bold mb-4">💻 Live Terminal Output <span class="text-xs text-gray-400">Real-time streaming</span></h2>
+            <div class="log-terminal" id="terminal-output">
+                <div class="log-line log-INFO">Waiting for bot activity...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ADMIN TAB -->
+    <div id="tab-admin" class="hidden">
+        
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
             
-            <!-- Search & Filters -->
-            <div class="stat-card mb-6">
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <input type="text" id="search-input" placeholder="Search by name or email..." 
-                           class="bg-gray-700 text-white px-4 py-2 rounded">
-                    <select id="status-filter" class="bg-gray-700 text-white px-4 py-2 rounded">
-                        <option value="">All Statuses</option>
-                        <option value="SUCCESS">Success Only</option>
-                        <option value="FAILED">Failed Only</option>
-                        <option value="INITIATED">Initiated Only</option>
-                    </select>
-                    <button onclick="searchLogs()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded font-semibold">
-                        🔍 Search
-                    </button>
-                </div>
+            <!-- Clear Database -->
+            <div class="stat-card">
+                <h2 class="text-xl font-bold mb-4 text-red-400">🗑️ Clear Database</h2>
+                <p class="text-gray-400 mb-4">This will delete ALL attempt logs and reset statistics.</p>
+                <input type="password" id="admin-password" placeholder="Enter admin password" 
+                       class="w-full bg-gray-700 text-white px-4 py-2 rounded mb-4">
+                <button onclick="clearDatabase()" 
+                        class="w-full bg-red-600 hover:bg-red-700 px-4 py-3 rounded font-semibold">
+                    ⚠️ CLEAR ALL DATA
+                </button>
+                <div id="clear-result" class="mt-4"></div>
             </div>
 
-            <!-- Logs Table -->
+            <!-- Proxy Stats -->
             <div class="stat-card">
-                <h2 class="text-xl font-bold mb-4">All Attempts (<span id="log-count">0</span>)</h2>
+                <h2 class="text-xl font-bold mb-4">🌐 Proxy Usage <span class="text-xs text-gray-400">Live</span></h2>
                 <div class="overflow-x-auto">
                     <table class="w-full text-sm">
                         <thead>
                             <tr class="text-gray-400 border-b border-gray-700">
-                                <th class="text-left py-2">Time</th>
-                                <th class="text-left py-2">Name</th>
-                                <th class="text-left py-2">Email</th>
-                                <th class="text-center py-2">Status</th>
-                                <th class="text-left py-2">Proxy Location</th>
-                                <th class="text-left py-2">Error</th>
+                                <th class="text-left py-2">IP</th>
+                                <th class="text-left py-2">Location</th>
+                                <th class="text-center py-2">Total</th>
                             </tr>
                         </thead>
-                        <tbody id="logs-table">
+                        <tbody id="admin-proxy-table">
                             <tr>
-                                <td colspan="6" class="text-center text-gray-400 py-8">Loading...</td>
+                                <td colspan="3" class="text-center text-gray-400 py-8">Loading...</td>
                             </tr>
                         </tbody>
                     </table>
@@ -256,306 +252,354 @@
 
         </div>
 
-        <!-- LIVE TERMINAL TAB -->
-        <div id="tab-terminal" class="hidden">
-            <div class="stat-card">
-                <h2 class="text-xl font-bold mb-4">💻 Live Terminal Output</h2>
-                <div class="log-terminal" id="terminal-output">
-                    <div class="log-line log-INFO">Waiting for bot activity...</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ADMIN TAB -->
-        <div id="tab-admin" class="hidden">
-            
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                
-                <!-- Clear Database -->
-                <div class="stat-card">
-                    <h2 class="text-xl font-bold mb-4 text-red-400">🗑️ Clear Database</h2>
-                    <p class="text-gray-400 mb-4">This will delete ALL attempt logs and reset statistics.</p>
-                    <input type="password" id="admin-password" placeholder="Enter admin password" 
-                           class="w-full bg-gray-700 text-white px-4 py-2 rounded mb-4">
-                    <button onclick="clearDatabase()" 
-                            class="w-full bg-red-600 hover:bg-red-700 px-4 py-3 rounded font-semibold">
-                        ⚠️ CLEAR ALL DATA
-                    </button>
-                    <div id="clear-result" class="mt-4"></div>
-                </div>
-
-                <!-- Proxy Stats -->
-                <div class="stat-card">
-                    <h2 class="text-xl font-bold mb-4">🌐 Proxy Usage</h2>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-sm">
-                            <thead>
-                                <tr class="text-gray-400 border-b border-gray-700">
-                                    <th class="text-left py-2">IP</th>
-                                    <th class="text-left py-2">Location</th>
-                                    <th class="text-center py-2">Total</th>
-                                </tr>
-                            </thead>
-                            <tbody id="admin-proxy-table">
-                                <tr>
-                                    <td colspan="3" class="text-center text-gray-400 py-8">Loading...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-            </div>
-
-        </div>
-
     </div>
 
-    <!-- Footer -->
-    <div class="text-center text-gray-500 text-sm py-8">
-        <p>Last updated: <span id="last-updated">-</span></p>
-        <p class="mt-2">Auto-refresh every 10 seconds</p>
-    </div>
+</div>
 
-    <script>
-        let activityChart = null;
-        let currentTab = 'overview';
+<!-- Footer -->
+<div class="text-center text-gray-500 text-sm py-8">
+    <p>Last updated: <span id="last-updated">-</span></p>
+    <p class="mt-2">⚡ Real-time updates: <span id="connection-status" class="text-green-400">Connected</span></p>
+</div>
 
-        // Switch tabs
-        function switchTab(tab) {
-            currentTab = tab;
-            
-            // Hide all tabs
-            document.querySelectorAll('[id^="tab-"]').forEach(el => el.classList.add('hidden'));
-            
-            // Show selected tab
-            document.getElementById(`tab-${tab}`).classList.remove('hidden');
-            
-            // Update button states
-            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
-            event.target.classList.add('active');
-            
-            // Load tab-specific data
-            if (tab === 'logs') searchLogs();
-            if (tab === 'terminal') loadLiveTerminal();
-            if (tab === 'admin') loadProxyStats();
+<script>
+    let activityChart = null;
+    let currentTab = 'overview';
+    let previousData = {};
+    
+    // Real-time update intervals
+    let statsInterval = null;
+    let logsInterval = null;
+    let terminalInterval = null;
+    let chartInterval = null;
+
+    // Switch tabs
+    function switchTab(tab) {
+        currentTab = tab;
+        
+        // Hide all tabs
+        document.querySelectorAll('[id^="tab-"]').forEach(el => el.classList.add('hidden'));
+        
+        // Show selected tab
+        document.getElementById(`tab-${tab}`).classList.remove('hidden');
+        
+        // Update button states
+        document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+        event.target.classList.add('active');
+        
+        // Clear all intervals
+        clearAllIntervals();
+        
+        // Start appropriate intervals for this tab
+        if (tab === 'overview') {
+            startOverviewUpdates();
+        } else if (tab === 'logs') {
+            startLogsUpdates();
+        } else if (tab === 'terminal') {
+            startTerminalUpdates();
+        } else if (tab === 'admin') {
+            startAdminUpdates();
         }
+    }
 
-        // Format functions
-        function formatDate(isoString) {
-            if (!isoString) return '-';
-            const date = new Date(isoString);
-            return date.toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit'
-            });
+    function clearAllIntervals() {
+        if (statsInterval) clearInterval(statsInterval);
+        if (logsInterval) clearInterval(logsInterval);
+        if (terminalInterval) clearInterval(terminalInterval);
+        if (chartInterval) clearInterval(chartInterval);
+    }
+
+    function startOverviewUpdates() {
+        loadStats(); // Initial load
+        loadRecentLogs();
+        loadChart();
+        
+        // Update every 2 seconds for stats
+        statsInterval = setInterval(loadStats, 2000);
+        
+        // Update logs every 3 seconds
+        logsInterval = setInterval(loadRecentLogs, 3000);
+        
+        // Update chart every 10 seconds
+        chartInterval = setInterval(loadChart, 10000);
+    }
+
+    function startLogsUpdates() {
+        searchLogs();
+        logsInterval = setInterval(searchLogs, 5000);
+    }
+
+    function startTerminalUpdates() {
+        loadLiveTerminal();
+        terminalInterval = setInterval(loadLiveTerminal, 1000); // Every second
+    }
+
+    function startAdminUpdates() {
+        loadProxyStats();
+        logsInterval = setInterval(loadProxyStats, 5000);
+    }
+
+    // Format functions
+    function formatDate(isoString) {
+        if (!isoString) return '-';
+        const date = new Date(isoString);
+        return date.toLocaleString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+    }
+
+    function formatRelativeTime(isoString) {
+        if (!isoString) return '-';
+        const date = new Date(isoString);
+        const now = new Date();
+        const diff = now - date;
+        const seconds = Math.floor(diff / 1000);
+        
+        if (seconds < 10) return 'Just now';
+        if (seconds < 60) return `${seconds}s ago`;
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return `${minutes}m ago`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours}h ago`;
+        const days = Math.floor(hours / 24);
+        return `${days}d ago`;
+    }
+
+    function highlightChange(elementId, cardId = null) {
+        const element = document.getElementById(elementId);
+        if (element) {
+            element.classList.add('updated');
+            setTimeout(() => element.classList.remove('updated'), 500);
         }
-
-        function formatRelativeTime(isoString) {
-            if (!isoString) return '-';
-            const date = new Date(isoString);
-            const now = new Date();
-            const diff = now - date;
-            const minutes = Math.floor(diff / 60000);
-            
-            if (minutes < 1) return 'Just now';
-            if (minutes < 60) return `${minutes}m ago`;
-            const hours = Math.floor(minutes / 60);
-            if (hours < 24) return `${hours}h ago`;
-            const days = Math.floor(hours / 24);
-            return `${days}d ago`;
-        }
-
-        // Load stats (overview tab)
-        async function loadStats() {
-            try {
-                const response = await fetch('/api/stats');
-                const data = await response.json();
-
-                document.getElementById('bot-status').textContent = data.bot_status;
-                document.getElementById('current-mode').textContent = `Mode: ${data.current_mode}`;
-                
-                const indicator = document.getElementById('status-indicator');
-                indicator.className = 'status-dot';
-                if (data.bot_status === 'RUNNING') indicator.classList.add('status-running');
-                else if (data.bot_status === 'PANIC_MODE') indicator.classList.add('status-panic');
-                else indicator.classList.add('status-paused');
-
-                document.getElementById('total-attempts').textContent = data.total_attempts.toLocaleString();
-                document.getElementById('success-rate').textContent = data.success_rate + '%';
-                document.getElementById('entries-24h').textContent = data.entries_last_24h.toLocaleString();
-                document.getElementById('entries-per-hour').textContent = data.entries_per_hour.toFixed(2);
-
-                document.getElementById('bot-status-detail').textContent = data.bot_status;
-                document.getElementById('current-mode-detail').textContent = data.current_mode;
-                document.getElementById('consecutive-failures').textContent = data.consecutive_failures;
-                document.getElementById('target-frequency').textContent = (data.target_frequency || 0).toFixed(2) + '/hr';
-                document.getElementById('next-run').textContent = formatRelativeTime(data.next_run_time);
-                document.getElementById('last-attempt').textContent = formatRelativeTime(data.last_attempt_time);
-
-                document.getElementById('total-successes').textContent = data.total_successes.toLocaleString();
-                document.getElementById('total-failures').textContent = data.total_failures.toLocaleString();
-                document.getElementById('successes-24h').textContent = data.successes_last_24h.toLocaleString();
-
-            } catch (error) {
-                console.error('Error loading stats:', error);
+        
+        if (cardId) {
+            const card = document.getElementById(cardId);
+            if (card) {
+                card.classList.add('pulse');
+                setTimeout(() => card.classList.remove('pulse'), 500);
             }
         }
+    }
 
-        // Load recent logs
-        async function loadRecentLogs() {
-            try {
-                const response = await fetch('/api/recent-logs');
-                const data = await response.json();
+    // Load stats with change detection
+    async function loadStats() {
+        try {
+            const response = await fetch('/api/stats');
+            const data = await response.json();
 
-                const container = document.getElementById('recent-logs');
+            // Update status
+            document.getElementById('bot-status').textContent = data.bot_status;
+            document.getElementById('current-mode').textContent = `Mode: ${data.current_mode}`;
+            
+            const indicator = document.getElementById('status-indicator');
+            indicator.className = 'status-dot';
+            if (data.bot_status === 'RUNNING') indicator.classList.add('status-running');
+            else if (data.bot_status === 'PANIC_MODE') indicator.classList.add('status-panic');
+            else indicator.classList.add('status-paused');
+
+            // Update with change detection
+            updateWithHighlight('total-attempts', data.total_attempts.toLocaleString(), 'card-attempts');
+            updateWithHighlight('success-rate', data.success_rate + '%', 'card-success');
+            updateWithHighlight('entries-24h', data.entries_last_24h.toLocaleString(), 'card-24h');
+            updateWithHighlight('entries-per-hour', data.entries_per_hour.toFixed(2), 'card-frequency');
+
+            document.getElementById('bot-status-detail').textContent = data.bot_status;
+            document.getElementById('current-mode-detail').textContent = data.current_mode;
+            document.getElementById('consecutive-failures').textContent = data.consecutive_failures;
+            document.getElementById('target-frequency').textContent = (data.target_frequency || 0).toFixed(2) + '/hr';
+            document.getElementById('next-run').textContent = formatRelativeTime(data.next_run_time);
+            document.getElementById('last-attempt').textContent = formatRelativeTime(data.last_attempt_time);
+
+            updateWithHighlight('total-successes', data.total_successes.toLocaleString());
+            updateWithHighlight('total-failures', data.total_failures.toLocaleString());
+            updateWithHighlight('successes-24h', data.successes_last_24h.toLocaleString());
+
+            updateTimestamp();
+            document.getElementById('connection-status').textContent = 'Connected';
+            document.getElementById('connection-status').className = 'text-green-400';
+
+        } catch (error) {
+            console.error('Error loading stats:', error);
+            document.getElementById('connection-status').textContent = 'Disconnected';
+            document.getElementById('connection-status').className = 'text-red-400';
+        }
+    }
+
+    function updateWithHighlight(elementId, newValue, cardId = null) {
+        const element = document.getElementById(elementId);
+        if (!element) return;
+        
+        const oldValue = element.textContent;
+        if (oldValue !== newValue && oldValue !== '-') {
+            highlightChange(elementId, cardId);
+        }
+        element.textContent = newValue;
+    }
+
+    // Load recent logs
+    async function loadRecentLogs() {
+        try {
+            const response = await fetch('/api/recent-logs');
+            const data = await response.json();
+
+            const container = document.getElementById('recent-logs');
+            
+            if (data.logs.length === 0) {
+                container.innerHTML = '<p class="text-gray-400 text-center py-8">No attempts yet</p>';
+                return;
+            }
+
+            container.innerHTML = data.logs.map(log => {
+                const statusColor = log.status === 'SUCCESS' ? 'text-green-400' : 
+                                   log.status === 'FAILED' ? 'text-red-400' : 'text-yellow-400';
+                const statusIcon = log.status === 'SUCCESS' ? '✅' : 
+                                  log.status === 'FAILED' ? '❌' : '⏳';
                 
-                if (data.logs.length === 0) {
-                    container.innerHTML = '<p class="text-gray-400 text-center py-8">No attempts yet</p>';
-                    return;
-                }
-
-                container.innerHTML = data.logs.map(log => {
-                    const statusColor = log.status === 'SUCCESS' ? 'text-green-400' : 
-                                       log.status === 'FAILED' ? 'text-red-400' : 'text-yellow-400';
-                    const statusIcon = log.status === 'SUCCESS' ? '✅' : 
-                                      log.status === 'FAILED' ? '❌' : '⏳';
-                    
-                    return `
-                        <div class="bg-gray-700 rounded p-3 text-sm">
-                            <div class="flex justify-between items-start">
-                                <div>
-                                    <p class="font-semibold">${log.persona_name || 'Unknown'}</p>
-                                    <p class="text-gray-400 text-xs">${log.persona_email || ''}</p>
-                                </div>
-                                <span class="${statusColor} font-semibold">${statusIcon} ${log.status}</span>
+                return `
+                    <div class="bg-gray-700 rounded p-3 text-sm">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <p class="font-semibold">${log.persona_name || 'Unknown'}</p>
+                                <p class="text-gray-400 text-xs">${log.persona_email || ''}</p>
                             </div>
-                            <div class="mt-2 text-xs text-gray-400">
-                                ${formatRelativeTime(log.timestamp)}
-                                ${log.proxy_city ? `• ${log.proxy_city}, ${log.proxy_state}` : ''}
-                            </div>
-                            ${log.error_message ? `<p class="text-red-400 text-xs mt-1">${log.error_message}</p>` : ''}
+                            <span class="${statusColor} font-semibold">${statusIcon} ${log.status}</span>
                         </div>
-                    `;
-                }).join('');
+                        <div class="mt-2 text-xs text-gray-400">
+                            ${formatRelativeTime(log.timestamp)}
+                            ${log.proxy_city ? `• ${log.proxy_city}, ${log.proxy_state}` : ''}
+                        </div>
+                        ${log.error_message ? `<p class="text-red-400 text-xs mt-1">${log.error_message}</p>` : ''}
+                    </div>
+                `;
+            }).join('');
 
-            } catch (error) {
-                console.error('Error loading logs:', error);
-            }
+        } catch (error) {
+            console.error('Error loading logs:', error);
         }
+    }
 
-        // Search logs (detailed logs tab)
-        async function searchLogs() {
-            try {
-                const search = document.getElementById('search-input').value;
-                const status = document.getElementById('status-filter').value;
-                
-                const params = new URLSearchParams();
-                if (search) params.append('search', search);
-                if (status) params.append('status', status);
-                params.append('limit', 100);
-                
-                const response = await fetch(`/api/search-logs?${params}`);
-                const data = await response.json();
+    // Search logs
+    async function searchLogs() {
+        try {
+            const search = document.getElementById('search-input').value;
+            const status = document.getElementById('status-filter').value;
+            
+            const params = new URLSearchParams();
+            if (search) params.append('search', search);
+            if (status) params.append('status', status);
+            params.append('limit', 100);
+            
+            const response = await fetch(`/api/search-logs?${params}`);
+            const data = await response.json();
 
-                document.getElementById('log-count').textContent = data.count;
+            document.getElementById('log-count').textContent = data.count;
 
-                const tbody = document.getElementById('logs-table');
-                
-                if (data.logs.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-gray-400 py-8">No logs found</td></tr>';
-                    return;
-                }
-
-                tbody.innerHTML = data.logs.map(log => `
-                    <tr class="border-b border-gray-700 hover:bg-gray-700">
-                        <td class="py-2 text-xs">${formatDate(log.timestamp)}</td>
-                        <td class="py-2">${log.persona_name || '-'}</td>
-                        <td class="py-2 text-xs">${log.persona_email || '-'}</td>
-                        <td class="py-2 text-center">
-                            <span class="${log.status === 'SUCCESS' ? 'text-green-400' : log.status === 'FAILED' ? 'text-red-400' : 'text-yellow-400'}">
-                                ${log.status}
-                            </span>
-                        </td>
-                        <td class="py-2 text-xs">${log.proxy_city ? `${log.proxy_city}, ${log.proxy_state}` : '-'}</td>
-                        <td class="py-2 text-xs text-red-400">${log.error_message || '-'}</td>
-                    </tr>
-                `).join('');
-
-            } catch (error) {
-                console.error('Error searching logs:', error);
+            const tbody = document.getElementById('logs-table');
+            
+            if (data.logs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-gray-400 py-8">No logs found</td></tr>';
+                return;
             }
+
+            tbody.innerHTML = data.logs.map(log => `
+                <tr class="border-b border-gray-700 hover:bg-gray-700">
+                    <td class="py-2 text-xs">${formatDate(log.timestamp)}</td>
+                    <td class="py-2">${log.persona_name || '-'}</td>
+                    <td class="py-2 text-xs">${log.persona_email || '-'}</td>
+                    <td class="py-2 text-center">
+                        <span class="${log.status === 'SUCCESS' ? 'text-green-400' : log.status === 'FAILED' ? 'text-red-400' : 'text-yellow-400'}">
+                            ${log.status}
+                        </span>
+                    </td>
+                    <td class="py-2 text-xs">${log.proxy_city ? `${log.proxy_city}, ${log.proxy_state}` : '-'}</td>
+                    <td class="py-2 text-xs text-red-400">${log.error_message || '-'}</td>
+                </tr>
+            `).join('');
+
+        } catch (error) {
+            console.error('Error searching logs:', error);
         }
+    }
 
-        // Load live terminal
-        async function loadLiveTerminal() {
-            try {
-                const response = await fetch('/api/live-logs');
-                const data = await response.json();
+    // Load live terminal with auto-scroll
+    async function loadLiveTerminal() {
+        try {
+            const response = await fetch('/api/live-logs');
+            const data = await response.json();
 
-                const terminal = document.getElementById('terminal-output');
-                
-                terminal.innerHTML = data.logs.map(log => {
-                    const levelClass = `log-${log.level}`;
-                    return `<div class="log-line ${levelClass}">[${new Date(log.timestamp).toLocaleTimeString()}] ${log.message}</div>`;
-                }).join('');
-                
-                // Auto-scroll to bottom
+            const terminal = document.getElementById('terminal-output');
+            const shouldScroll = terminal.scrollHeight - terminal.scrollTop === terminal.clientHeight;
+            
+            terminal.innerHTML = data.logs.map(log => {
+                const levelClass = `log-${log.level}`;
+                return `<div class="log-line ${levelClass}">[${new Date(log.timestamp).toLocaleTimeString()}] ${log.message}</div>`;
+            }).join('');
+            
+            // Auto-scroll if was at bottom
+            if (shouldScroll) {
                 terminal.scrollTop = terminal.scrollHeight;
-
-            } catch (error) {
-                console.error('Error loading terminal:', error);
             }
+
+        } catch (error) {
+            console.error('Error loading terminal:', error);
+        }
+    }
+
+    // Clear database
+    async function clearDatabase() {
+        const password = document.getElementById('admin-password').value;
+        const resultDiv = document.getElementById('clear-result');
+        
+        if (!password) {
+            resultDiv.innerHTML = '<p class="text-red-400">Please enter password</p>';
+            return;
+        }
+        
+        if (!confirm('Are you sure? This will delete ALL data!')) {
+            return;
         }
 
-        // Clear database
-        async function clearDatabase() {
-            const password = document.getElementById('admin-password').value;
-            const resultDiv = document.getElementById('clear-result');
-            
-            if (!password) {
-                resultDiv.innerHTML = '<p class="text-red-400">Please enter password</p>';
-                return;
+        try {
+            const response = await fetch('/api/clear-database', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password })
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                resultDiv.innerHTML = '<p class="text-green-400">✅ Database cleared successfully!</p>';
+                setTimeout(() => location.reload(), 2000);
+            } else {
+                resultDiv.innerHTML = `<p class="text-red-400">❌ ${data.error}</p>`;
             }
-            
-            if (!confirm('Are you sure? This will delete ALL data!')) {
-                return;
-            }
 
-            try {
-                const response = await fetch('/api/clear-database', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password })
-                });
-
-                const data = await response.json();
-
-                if (response.ok) {
-                    resultDiv.innerHTML = '<p class="text-green-400">✅ Database cleared successfully!</p>';
-                    setTimeout(() => location.reload(), 2000);
-                } else {
-                    resultDiv.innerHTML = `<p class="text-red-400">❌ ${data.error}</p>`;
-                }
-
-            } catch (error) {
-                resultDiv.innerHTML = `<p class="text-red-400">❌ Error: ${error.message}</p>`;
-            }
+        } catch (error) {
+            resultDiv.innerHTML = `<p class="text-red-400">❌ Error: ${error.message}</p>`;
         }
+    }
 
-        // Load chart
-        async function loadChart() {
-            try {
-                const response = await fetch('/api/hourly-chart');
-                const data = await response.json();
+    // Load chart with smooth updates
+    async function loadChart() {
+        try {
+            const response = await fetch('/api/hourly-chart');
+            const data = await response.json();
 
-                const ctx = document.getElementById('activityChart').getContext('2d');
+            const ctx = document.getElementById('activityChart').getContext('2d');
 
-                if (activityChart) activityChart.destroy();
-
+            if (activityChart) {
+                // Update existing chart (smoother)
+                activityChart.data.labels = data.labels.map(l => new Date(l).toLocaleTimeString('en-US', {hour: '2-digit'}));
+                activityChart.data.datasets[0].data = data.successes;
+                activityChart.data.datasets[1].data = data.failures;
+                activityChart.update('none'); // Update without animation
+            } else {
+                // Create new chart
                 activityChart = new Chart(ctx, {
                     type: 'line',
                     data: {
@@ -587,59 +631,53 @@
                         }
                     }
                 });
-
-            } catch (error) {
-                console.error('Error loading chart:', error);
             }
+
+        } catch (error) {
+            console.error('Error loading chart:', error);
         }
+    }
 
-        // Load proxy stats
-        async function loadProxyStats() {
-            try {
-                const response = await fetch('/api/proxy-stats');
-                const data = await response.json();
+    // Load proxy stats
+    async function loadProxyStats() {
+        try {
+            const response = await fetch('/api/proxy-stats');
+            const data = await response.json();
 
-                const tbody = document.getElementById('admin-proxy-table');
-                
-                if (data.proxies.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-400 py-8">No proxy data</td></tr>';
-                    return;
-                }
-
-                tbody.innerHTML = data.proxies.slice(0, 10).map(proxy => `
-                    <tr class="border-b border-gray-700">
-                        <td class="py-2 font-mono text-xs">${proxy.ip}</td>
-                        <td class="py-2">${proxy.city}, ${proxy.state}</td>
-                        <td class="py-2 text-center">${proxy.total}</td>
-                    </tr>
-                `).join('');
-
-            } catch (error) {
-                console.error('Error loading proxy stats:', error);
+            const tbody = document.getElementById('admin-proxy-table');
+            
+            if (data.proxies.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" class="text-center text-gray-400 py-8">No proxy data</td></tr>';
+                return;
             }
+
+            tbody.innerHTML = data.proxies.slice(0, 10).map(proxy => `
+                <tr class="border-b border-gray-700">
+                    <td class="py-2 font-mono text-xs">${proxy.ip}</td>
+                    <td class="py-2">${proxy.city}, ${proxy.state}</td>
+                    <td class="py-2 text-center">${proxy.total}</td>
+                </tr>
+            `).join('');
+
+        } catch (error) {
+            console.error('Error loading proxy stats:', error);
         }
+    }
 
-        function updateTimestamp() {
-            document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
-        }
+    function updateTimestamp() {
+        document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
+    }
 
-        function loadAll() {
-            if (currentTab === 'overview') {
-                loadStats();
-                loadRecentLogs();
-                loadChart();
-                updateTimestamp();
-            } else if (currentTab === 'terminal') {
-                loadLiveTerminal();
-            }
-        }
+    // Initialize on page load
+    window.addEventListener('DOMContentLoaded', () => {
+        startOverviewUpdates();
+    });
 
-        // Initial load
-        loadAll();
-
-        // Auto-refresh
-        setInterval(loadAll, 10000);
-    </script>
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+        clearAllIntervals();
+    });
+</script>
 
 </body>
 </html>
