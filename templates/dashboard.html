@@ -333,7 +333,198 @@
                 </button>
                 <div id="clear-result" class="mt-4"></div>
             </div>
+            <!-- Add this to the ADMIN TAB in your dashboard.html -->
 
+            <!-- Email Management Section -->
+            <div class="stat-card">
+                <h2 class="text-xl font-bold mb-4">📧 Master Email Configuration</h2>
+                <p class="text-gray-400 text-sm mb-4">Manage email accounts for persona generation (no redeploy needed!)</p>
+                
+                <!-- Current Emails List -->
+                <div class="mb-6">
+                    <h3 class="text-lg font-semibold mb-3">Current Emails</h3>
+                    <div class="space-y-2" id="email-list">
+                        <p class="text-gray-400 text-center py-4">Loading...</p>
+                    </div>
+                </div>
+                
+                <!-- Add New Email Form -->
+                <div class="border-t border-gray-700 pt-6">
+                    <h3 class="text-lg font-semibold mb-3">Add New Email</h3>
+                    <div class="space-y-3">
+                        <input type="text" id="new-email-account" placeholder="Email account (e.g., UsersMaiI)" 
+                            class="w-full bg-gray-700 text-white px-4 py-2 rounded">
+                        <select id="new-email-domain" class="w-full bg-gray-700 text-white px-4 py-2 rounded">
+                            <option value="">Select domain...</option>
+                            <option value="gmail.com">gmail.com</option>
+                            <option value="outlook.com">outlook.com</option>
+                            <option value="yahoo.com">yahoo.com</option>
+                            <option value="icloud.com">icloud.com</option>
+                            <option value="protonmail.com">protonmail.com</option>
+                        </select>
+                        <input type="password" id="email-admin-password" placeholder="Admin password" 
+                            class="w-full bg-gray-700 text-white px-4 py-2 rounded">
+                        <button onclick="addEmail()" 
+                                class="w-full bg-blue-600 hover:bg-blue-700 px-4 py-3 rounded font-semibold">
+                            ➕ Add Email
+                        </button>
+                        <div id="email-result" class="mt-2"></div>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+            // Load email list
+            async function loadEmails() {
+                try {
+                    const response = await fetch('/api/emails');
+                    const data = await response.json();
+                    
+                    const container = document.getElementById('email-list');
+                    
+                    if (data.emails.length === 0) {
+                        container.innerHTML = '<p class="text-gray-400 text-center py-4">No emails configured</p>';
+                        return;
+                    }
+                    
+                    container.innerHTML = data.emails.map(email => {
+                        const statusClass = email.is_active ? 'text-green-400' : 'text-red-400';
+                        const statusIcon = email.is_active ? '✅' : '❌';
+                        const toggleText = email.is_active ? 'Disable' : 'Enable';
+                        
+                        return `
+                            <div class="bg-gray-700 rounded p-3 flex items-center justify-between">
+                                <div>
+                                    <span class="font-mono">${email.email_account}@${email.domain}</span>
+                                    <span class="${statusClass} ml-2">${statusIcon}</span>
+                                </div>
+                                <div class="space-x-2">
+                                    <button onclick="toggleEmail('${email.domain}', ${!email.is_active})" 
+                                            class="text-yellow-400 hover:text-yellow-300 text-sm">
+                                        ${toggleText}
+                                    </button>
+                                    <button onclick="deleteEmail('${email.domain}')" 
+                                            class="text-red-400 hover:text-red-300 text-sm">
+                                        Delete
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                    
+                } catch (error) {
+                    console.error('Error loading emails:', error);
+                }
+            }
+
+            // Add new email
+            async function addEmail() {
+                const account = document.getElementById('new-email-account').value;
+                const domain = document.getElementById('new-email-domain').value;
+                const password = document.getElementById('email-admin-password').value;
+                const resultDiv = document.getElementById('email-result');
+                
+                if (!account || !domain) {
+                    resultDiv.innerHTML = '<p class="text-red-400">Please fill in all fields</p>';
+                    return;
+                }
+                
+                if (!password) {
+                    resultDiv.innerHTML = '<p class="text-red-400">Admin password required</p>';
+                    return;
+                }
+                
+                try {
+                    const response = await fetch('/api/emails/add', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email_account: account, domain: domain, password: password })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        resultDiv.innerHTML = '<p class="text-green-400">✅ ' + data.message + '</p>';
+                        document.getElementById('new-email-account').value = '';
+                        document.getElementById('new-email-domain').value = '';
+                        document.getElementById('email-admin-password').value = '';
+                        
+                        // Reload email list
+                        setTimeout(() => {
+                            loadEmails();
+                            resultDiv.innerHTML = '';
+                        }, 2000);
+                    } else {
+                        resultDiv.innerHTML = '<p class="text-red-400">❌ ' + data.error + '</p>';
+                    }
+                    
+                } catch (error) {
+                    resultDiv.innerHTML = '<p class="text-red-400">❌ Error: ' + error.message + '</p>';
+                }
+            }
+
+            // Toggle email active status
+            async function toggleEmail(domain, active) {
+                const password = prompt('Enter admin password:');
+                if (!password) return;
+                
+                try {
+                    const response = await fetch('/api/emails/toggle', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ domain: domain, active: active, password: password })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        loadEmails();
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                    
+                } catch (error) {
+                    alert('Error: ' + error.message);
+                }
+            }
+
+            // Delete email
+            async function deleteEmail(domain) {
+                if (!confirm(`Are you sure you want to delete ${domain}?`)) return;
+                
+                const password = prompt('Enter admin password:');
+                if (!password) return;
+                
+                try {
+                    const response = await fetch('/api/emails/delete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ domain: domain, password: password })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        loadEmails();
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                    
+                } catch (error) {
+                    alert('Error: ' + error.message);
+                }
+            }
+
+            // Load emails when admin tab is opened
+            function startAdminUpdates() {
+                loadEmails();
+                loadProxyStats();
+                logsInterval = setInterval(() => {
+                    loadEmails();
+                    loadProxyStats();
+                }, 5000);
+            }
+            </script>
             <!-- Proxy Stats -->
             <div class="stat-card">
                 <h2 class="text-xl font-bold mb-4">🌐 Proxy Usage <span class="text-xs text-gray-400">Live</span></h2>

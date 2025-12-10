@@ -3,42 +3,30 @@ import string
 from datetime import datetime
 from faker import Faker
 
+# Import the dynamic email config manager
+from email_config_manager import EmailConfigManager
+
 fake = Faker('en_US')
 
 class PersonaGenerator:
     """Generates highly realistic, internally consistent fake identities"""
     
-    # Master email accounts (weighted by real-world usage)
-    # ✅ ENABLED emails will be used for persona generation
-    # ❌ DISABLED emails are commented out but can be re-enabled anytime
-    MASTER_EMAILS = {
-        # ✅ ACTIVE MASTER EMAIL
-        "outlook.com": "UsersMaiI",      # Your primary email
-        
-        # ❌ DISABLED - Uncomment to re-enable
-        # "gmail.com": "",                # Uncomment and add your Gmail
-        # "yahoo.com": "",                # Uncomment and add your Yahoo
-        # "icloud.com": "",               # Uncomment and add your iCloud
-        # "protonmail.com": "",           # Uncomment and add your ProtonMail
-    }
+    def __init__(self):
+        self.fake = Faker('en_US')
+        self.email_manager = EmailConfigManager()
     
-    # Domain weights - automatically calculated from enabled emails
-    # This will dynamically adjust based on which emails are enabled
-    @classmethod
-    def _get_active_domains(cls):
-        """Get only the domains that have email addresses configured"""
-        return {domain: email for domain, email in cls.MASTER_EMAILS.items() if email}
+    def _get_active_domains(self):
+        """Get active email domains from Supabase (cached)"""
+        return self.email_manager.get_master_emails()
     
-    @classmethod
-    def _get_domain_weights(cls):
+    def _get_domain_weights(self, active_domains):
         """Generate weights based on number of active domains"""
-        active = cls._get_active_domains()
-        num_active = len(active)
+        num_active = len(active_domains)
         
         if num_active == 0:
-            raise ValueError("No master emails configured! Please add at least one email address.")
+            raise ValueError("No master emails configured! Please add at least one email via the dashboard.")
         
-        # Equal weight distribution if only one domain
+        # Equal weight distribution
         if num_active == 1:
             return [100]
         
@@ -99,16 +87,13 @@ class PersonaGenerator:
         'Kimberly': ['Kim', 'Kimmy']
     }
     
-    def __init__(self):
-        self.fake = Faker('en_US')
-    
     def generate(self):
         """Generate a complete persona with realistic variations"""
         
         # Verify at least one email is configured
         active_domains = self._get_active_domains()
         if not active_domains:
-            raise ValueError("No master emails configured! Please add at least one email address in MASTER_EMAILS.")
+            raise ValueError("No master emails configured! Please add at least one email via the dashboard.")
         
         # Step 1: Generate core identity
         first_name = self.fake.first_name()
@@ -125,7 +110,7 @@ class PersonaGenerator:
         
         if random.random() < 0.08:
             typo_type = random.choice(['adjacent', 'double', 'omit', 'transpose'])
-            if random.random() < 0.5:  # Typo in first or last
+            if random.random() < 0.5:
                 first_name = self._apply_realistic_typo(first_name, typo_type)
             else:
                 last_name = self._apply_realistic_typo(last_name, typo_type)
@@ -139,7 +124,7 @@ class PersonaGenerator:
         # Step 5: Generate realistic age
         birth_year = self._generate_realistic_birth_year()
         
-        # Step 6: Generate email
+        # Step 6: Generate email (now dynamic!)
         email = self._generate_email(original_first, original_last, birth_year)
         
         return {
@@ -159,7 +144,6 @@ class PersonaGenerator:
         text_lower = text.lower()
         
         if typo_type == 'adjacent' and any(c in self.TYPO_MAP for c in text_lower):
-            # Adjacent key substitution
             typo_candidates = [i for i, char in enumerate(text_lower) if char in self.TYPO_MAP]
             if typo_candidates:
                 idx = random.choice(typo_candidates)
@@ -170,18 +154,15 @@ class PersonaGenerator:
                 return ''.join(text_list)
         
         elif typo_type == 'double':
-            # Double letter (common with fast typing)
             idx = random.randint(1, len(text) - 1)
             return text[:idx] + text[idx-1] + text[idx:]
         
         elif typo_type == 'omit':
-            # Missing letter
             if len(text) > 3:
                 idx = random.randint(1, len(text) - 2)
                 return text[:idx] + text[idx+1:]
         
         elif typo_type == 'transpose':
-            # Swap adjacent letters
             if len(text) > 2:
                 idx = random.randint(0, len(text) - 2)
                 text_list = list(text)
@@ -191,14 +172,13 @@ class PersonaGenerator:
         return text
     
     def _generate_realistic_birth_year(self):
-        """Generate realistic age distribution (not everyone is 20-something)"""
-        # Age distribution based on internet users
+        """Generate realistic age distribution"""
         age_ranges = [
-            (18, 25, 20),  # Young adults - 20%
-            (26, 35, 30),  # Millennials - 30%
-            (36, 45, 25),  # Gen X - 25%
-            (46, 60, 20),  # Boomers - 20%
-            (61, 75, 5),   # Seniors - 5%
+            (18, 25, 20),
+            (26, 35, 30),
+            (36, 45, 25),
+            (46, 60, 20),
+            (61, 75, 5),
         ]
         
         current_year = datetime.now().year
@@ -208,18 +188,18 @@ class PersonaGenerator:
         return current_year - age
     
     def _generate_email(self, first_name, last_name, birth_year):
-        """Generate realistic email with proper domain distribution"""
+        """Generate realistic email with dynamic domain distribution"""
         
-        # Get active domains and weights
+        # Get active domains from Supabase
         active_domains = self._get_active_domains()
         domains = list(active_domains.keys())
-        weights = self._get_domain_weights()
+        weights = self._get_domain_weights(active_domains)
         
         # Choose domain based on weights
         base_domain = random.choices(domains, weights=weights)[0]
         master_account = active_domains[base_domain]
         
-        # 60% name-based, 40% random (people usually use their names)
+        # 60% name-based, 40% random
         use_name_based = random.random() < 0.60
         
         if use_name_based:
@@ -234,21 +214,20 @@ class PersonaGenerator:
         first = first_name.lower().replace("'", "").replace("-", "")
         last = last_name.lower().replace("'", "").replace("-", "")
         
-        # More diverse patterns with realistic weights
         patterns = [
-            (f"{first}.{last}", 20),                    # john.smith (most common)
-            (f"{first}{last}", 15),                     # johnsmith
-            (f"{first[0]}.{last}", 12),                 # j.smith
-            (f"{first[0]}{last}", 10),                  # jsmith
-            (f"{first}.{last[0]}", 8),                  # john.s
-            (f"{first}_{last}", 7),                     # john_smith
-            (f"{first}.{last}{birth_year % 100}", 6),   # john.smith95
-            (f"{first}{birth_year % 100}", 5),          # john95
-            (f"{last}.{first}", 5),                     # smith.john
-            (f"{last}{first[0]}", 4),                   # smithj
-            (f"{first}{last[0]}", 3),                   # johns
-            (f"{first}.{last}.{birth_year}", 3),        # john.smith.1995
-            (f"{first}_{last}_{birth_year % 100}", 2), # john_smith_95
+            (f"{first}.{last}", 20),
+            (f"{first}{last}", 15),
+            (f"{first[0]}.{last}", 12),
+            (f"{first[0]}{last}", 10),
+            (f"{first}.{last[0]}", 8),
+            (f"{first}_{last}", 7),
+            (f"{first}.{last}{birth_year % 100}", 6),
+            (f"{first}{birth_year % 100}", 5),
+            (f"{last}.{first}", 5),
+            (f"{last}{first[0]}", 4),
+            (f"{first}{last[0]}", 3),
+            (f"{first}.{last}.{birth_year}", 3),
+            (f"{first}_{last}_{birth_year % 100}", 2),
         ]
         
         pattern_choices, weights = zip(*patterns)
@@ -271,7 +250,6 @@ class PersonaGenerator:
             "knight", "wizard", "ace", "boss", "chief", "legend", "beast", "fox"
         ]
         
-        # More realistic username patterns
         pattern_type = random.choices(
             ["adjective_noun_num", "noun_num", "word_year", "word_underscore_num", 
              "just_word_num", "double_word", "xXwordXx"],
@@ -283,113 +261,29 @@ class PersonaGenerator:
             noun = random.choice(nouns)
             num = random.randint(1, 999)
             return f"{adj}{noun}{num}"
-        
         elif pattern_type == "noun_num":
             noun = random.choice(nouns)
-            num = random.choice([
-                random.randint(1, 99),
-                random.randint(100, 999),
-                birth_year % 100,
-                birth_year
-            ])
+            num = random.choice([random.randint(1, 99), random.randint(100, 999), birth_year % 100, birth_year])
             return f"{noun}{num}"
-        
         elif pattern_type == "word_year":
             word = random.choice(adjectives + nouns)
             return f"{word}{birth_year}"
-        
         elif pattern_type == "word_underscore_num":
             word = random.choice(adjectives + nouns)
             num = random.randint(1, 999)
             return f"{word}_{num}"
-        
         elif pattern_type == "just_word_num":
             word = random.choice(adjectives + nouns)
             num = random.randint(10, 99)
             return f"{word}{num}"
-        
         elif pattern_type == "double_word":
             word1 = random.choice(adjectives + nouns)
             word2 = random.choice(nouns)
             return f"{word1}{word2}"
-        
-        else:  # xXwordXx (nostalgic early 2000s style)
+        else:
             word = random.choice(adjectives + nouns)
             return f"xX{word}Xx"
     
     def generate_batch(self, count=10):
         """Generate multiple personas"""
         return [self.generate() for _ in range(count)]
-
-
-# Enhanced test function
-def test_persona_generator():
-    """Test the enhanced persona generator"""
-    generator = PersonaGenerator()
-    
-    print("=" * 80)
-    print("🎭 ENHANCED REALISTIC PERSONA GENERATOR")
-    print("=" * 80)
-    
-    # Show active configuration
-    active_domains = generator._get_active_domains()
-    print(f"\n✅ ACTIVE MASTER EMAILS:")
-    print("-" * 80)
-    for domain, account in active_domains.items():
-        print(f"   • {account}@{domain}")
-    
-    disabled_count = len(generator.MASTER_EMAILS) - len(active_domains)
-    if disabled_count > 0:
-        print(f"\n❌ DISABLED: {disabled_count} email(s) (can be re-enabled in code)")
-    
-    print("-" * 80)
-    
-    personas = generator.generate_batch(20)
-    
-    # Statistics
-    name_based = sum(1 for p in personas if any(
-        p['first'].lower()[:3] in p['email'].split('+')[1].lower() or
-        p['last'].lower()[:3] in p['email'].split('+')[1].lower()
-    ))
-    with_middle = sum(1 for p in personas if p['middle'])
-    with_typos = sum(1 for p in personas if p['has_typo'])
-    
-    # Age distribution
-    ages = [datetime.now().year - p['birth_year'] for p in personas]
-    avg_age = sum(ages) / len(ages)
-    
-    print(f"\n📊 SAMPLE PERSONAS (showing 10 of {len(personas)})")
-    print("-" * 80)
-    
-    for i, persona in enumerate(personas[:10], 1):
-        age = datetime.now().year - persona['birth_year']
-        middle = f" {persona['middle']}." if persona['middle'] else ""
-        typo_flag = " ⚠️ typo" if persona['has_typo'] else ""
-        
-        print(f"{i:2d}. {persona['first']}{middle} {persona['last']} (age {age}){typo_flag}")
-        print(f"    📧 {persona['email']}")
-        print()
-    
-    print("=" * 80)
-    print(f"✅ GENERATION STATISTICS")
-    print("-" * 80)
-    print(f"   Total personas: {len(personas)}")
-    print(f"   Name-based emails: {name_based} ({name_based/len(personas)*100:.0f}%)")
-    print(f"   Random usernames: {len(personas)-name_based} ({(len(personas)-name_based)/len(personas)*100:.0f}%)")
-    print(f"   With middle initials: {with_middle} ({with_middle/len(personas)*100:.0f}%)")
-    print(f"   With typos: {with_typos} ({with_typos/len(personas)*100:.0f}%)")
-    print(f"   Average age: {avg_age:.0f} years old")
-    print("=" * 80)
-    
-    print("\n📮 EMAIL ROUTING (+ Aliasing)")
-    print("-" * 80)
-    print("All emails route to your master account:")
-    print()
-    for domain, account in active_domains.items():
-        print(f"  {account}+john.smith@{domain}  → {account}@{domain}")
-    print()
-    print("🎯 Websites see unique emails, but YOU receive everything!")
-    print("=" * 80)
-
-if __name__ == "__main__":
-    test_persona_generator()

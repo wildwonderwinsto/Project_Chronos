@@ -284,6 +284,98 @@ def add_live_log():
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+# Add these routes to your app.py file
+
+from email_config_manager import EmailConfigManager
+
+email_manager = EmailConfigManager()
+
+@app.route('/api/emails')
+def get_emails():
+    """Get all email configurations"""
+    try:
+        emails = email_manager.list_emails()
+        return jsonify({'emails': emails})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/emails/add', methods=['POST'])
+def add_email():
+    """Add a new master email"""
+    try:
+        data = request.get_json()
+        password = data.get('password')
+        domain = data.get('domain')
+        email_account = data.get('email_account')
+        
+        # Verify admin password
+        if password != os.getenv('ADMIN_PASSWORD', 'chronos2025'):
+            return jsonify({'error': 'Invalid password'}), 403
+        
+        if not domain or not email_account:
+            return jsonify({'error': 'Domain and email account are required'}), 400
+        
+        success = email_manager.add_email(domain, email_account)
+        
+        if success:
+            return jsonify({'success': True, 'message': f'Added {email_account}@{domain}'})
+        else:
+            return jsonify({'error': 'Failed to add email'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/emails/toggle', methods=['POST'])
+def toggle_email():
+    """Enable or disable an email"""
+    try:
+        data = request.get_json()
+        password = data.get('password')
+        domain = data.get('domain')
+        active = data.get('active', True)
+        
+        # Verify admin password
+        if password != os.getenv('ADMIN_PASSWORD', 'chronos2025'):
+            return jsonify({'error': 'Invalid password'}), 403
+        
+        if not domain:
+            return jsonify({'error': 'Domain is required'}), 400
+        
+        success = email_manager.toggle_email(domain, active)
+        
+        if success:
+            status = "enabled" if active else "disabled"
+            return jsonify({'success': True, 'message': f'{domain} {status}'})
+        else:
+            return jsonify({'error': 'Failed to toggle email'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/emails/delete', methods=['POST'])
+def delete_email():
+    """Delete an email configuration"""
+    try:
+        data = request.get_json()
+        password = data.get('password')
+        domain = data.get('domain')
+        
+        # Verify admin password
+        if password != os.getenv('ADMIN_PASSWORD', 'chronos2025'):
+            return jsonify({'error': 'Invalid password'}), 403
+        
+        if not domain:
+            return jsonify({'error': 'Domain is required'}), 400
+        
+        success = email_manager.delete_email(domain)
+        
+        if success:
+            return jsonify({'success': True, 'message': f'Deleted {domain}'})
+        else:
+            return jsonify({'error': 'Failed to delete email'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     # START THE SCHEDULER

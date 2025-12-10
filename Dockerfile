@@ -13,5 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of your application code
 COPY . .
 
+# Install Tesseract OCR for CAPTCHA solving
+RUN apt-get update && apt-get install -y tesseract-ocr && rm -rf /var/lib/apt/lists/*
+
 # Run the application
 CMD ["python", "app.py"]

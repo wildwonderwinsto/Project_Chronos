@@ -34,7 +34,7 @@ FAILURE_INDICATORS = {
 
 # ===== BROWSER CONFIGURATION =====
 BROWSER_CONFIG = {
-    "headless": False,  # Set to True for production (no visible browser)
+    "headless": True,  # Set to True for production (no visible browser)
     "viewport": {
         "width": 1920,
         "height": 1080
