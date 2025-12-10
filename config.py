@@ -42,6 +42,13 @@ BROWSER_CONFIG = {
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
+# ===== PROXY CONFIGURATION =====
+PROXY_CONFIG = {
+    "max_attempts": 15,  # Try up to 15 proxies before falling back to direct connection
+    "test_timeout": 15000,  # Timeout for proxy testing (milliseconds)
+    "us_only": True  # Only use US-based proxies
+}
+
 # ===== TIMING CONFIGURATION =====
 TIMING = {
     "page_load_timeout": 60000,      # 60 second

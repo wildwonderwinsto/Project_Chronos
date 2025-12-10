@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import from parent directory (Project_Chronos/)
 from persona_generator import PersonaGenerator
-from config import TARGET_URL, BROWSER_CONFIG, TIMING, FORM_SELECTORS
+from config import TARGET_URL, BROWSER_CONFIG, TIMING, FORM_SELECTORS, PROXY_CONFIG
 
 # Import from same directory (Browser/)
 from Browser.form_filler import FormFiller
@@ -96,32 +96,32 @@ class BrowserEngine:
         proxy_mgr = ProxyManager()
         fingerprint_mgr = FingerprintManager()
         
-        # Try to get a working proxy (with retries)
+        # Try to get a working proxy - keep trying until proxies are exhausted
         proxy = None
-        max_proxy_attempts = 3
+        max_proxy_attempts = PROXY_CONFIG['max_attempts']  # From config
         
         for attempt in range(max_proxy_attempts):
             candidate_proxy = await proxy_mgr.get_proxy()
             
             if not candidate_proxy:
-                print(f"   ⚠️  No proxy available, will use direct connection")
+                print(f"   ⚠️  No more proxies available (tried {attempt} proxies)")
                 break
             
             # Test if proxy works
-            print(f"   🔍 Testing proxy {candidate_proxy['ip']}...")
+            print(f"   🔍 Testing proxy {attempt + 1}/{max_proxy_attempts}: {candidate_proxy['ip']}...")
             if await self._test_proxy(candidate_proxy):
                 proxy = candidate_proxy
                 print(f"   ✅ Proxy validated!")
                 break
             else:
-                print(f"   ❌ Proxy failed validation, trying next...")
+                print(f"   ❌ Proxy failed, trying next...")
                 proxy_mgr.mark_proxy_failed(candidate_proxy['server'])
         
         if proxy:
             print(f"   🌐 Using proxy: {proxy['ip']} ({proxy['city']}, {proxy['country']})")
             fingerprint = fingerprint_mgr.generate_fingerprint(timezone=proxy['timezone'])
         else:
-            print(f"   🌐 Using direct connection (no proxy)")
+            print(f"   🌐 Using direct connection (no working proxy found after trying {max_proxy_attempts} proxies)")
             fingerprint = fingerprint_mgr.generate_fingerprint()
             proxy = None
         
@@ -199,25 +199,31 @@ class BrowserEngine:
                             originalQuery(parameters)
                     );
                     
-                    // CRITICAL: Clear ALL storage on page load
-                    try {
-                        localStorage.clear();
-                        sessionStorage.clear();
-                        
-                        // Clear all cookies
-                        document.cookie.split(";").forEach(function(c) { 
-                            document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
-                        });
-                        
-                        // Clear IndexedDB
-                        if (window.indexedDB && window.indexedDB.databases) {
-                            window.indexedDB.databases().then((dbs) => {
-                                dbs.forEach(db => window.indexedDB.deleteDatabase(db.name));
-                            });
-                        }
-                    } catch (e) {
-                        console.log('Storage clearing in init script:', e);
-                    }
+                    // CRITICAL: Override localStorage to prevent ANY persistence
+                    const fakeStorage = {
+                        length: 0,
+                        clear: () => {},
+                        getItem: (key) => null,
+                        setItem: (key, value) => {},
+                        removeItem: (key) => {},
+                        key: (index) => null
+                    };
+                    
+                    // Replace localStorage with fake version that does nothing
+                    Object.defineProperty(window, 'localStorage', {
+                        value: fakeStorage,
+                        writable: false,
+                        configurable: false
+                    });
+                    
+                    // Replace sessionStorage too
+                    Object.defineProperty(window, 'sessionStorage', {
+                        value: fakeStorage,
+                        writable: false,
+                        configurable: false
+                    });
+                    
+                    console.log('🔒 Storage override complete - localStorage/sessionStorage disabled');
                 """)
             
                 # Create page
@@ -231,80 +237,48 @@ class BrowserEngine:
                 # Wait for page to fully load
                 await asyncio.sleep(random.uniform(2, 3))
 
-                # AGGRESSIVE STORAGE CLEARING AFTER PAGE LOAD
-                print(f"   🧹 Aggressively clearing all storage...")
+                # Verify localStorage is actually blocked
+                print(f"   🔍 Verifying storage is disabled...")
                 try:
-                    # Clear localStorage multiple times (sometimes first clear doesn't stick)
-                    for _ in range(3):
-                        await page.evaluate("""
-                            () => {
-                                try {
-                                    localStorage.clear();
-                                    sessionStorage.clear();
-                                    
-                                    // Delete specific keys that might remain
-                                    for (let i = 0; i < localStorage.length; i++) {
-                                        const key = localStorage.key(i);
-                                        localStorage.removeItem(key);
-                                    }
-                                    
-                                    // Clear cookies aggressively
-                                    document.cookie.split(";").forEach(function(c) { 
-                                        const name = c.split("=")[0].trim();
-                                        // Clear for multiple paths and domains
-                                        document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
-                                        document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=" + window.location.hostname;
-                                        document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=." + window.location.hostname;
-                                    });
-                                    
-                                    console.log('Storage cleared');
-                                } catch (e) {
-                                    console.log('Storage clearing error:', e);
-                                }
-                            }
-                        """)
-                        await asyncio.sleep(0.2)  # Small delay between clearing attempts
-                    
-                    # Verify storage is actually clear
                     storage_check = await page.evaluate("""
                         () => {
-                            return {
-                                localStorageKeys: Object.keys(localStorage),
-                                sessionStorageKeys: Object.keys(sessionStorage),
-                                cookieCount: document.cookie.split(';').filter(c => c.trim()).length
-                            };
+                            try {
+                                // Try to write
+                                localStorage.setItem('test', 'value');
+                                const hasTest = localStorage.getItem('test') !== null;
+                                
+                                // Check for comp flag
+                                const hasFlag = localStorage.getItem('comp_388') !== null;
+                                
+                                return {
+                                    canWrite: hasTest,
+                                    hasCompFlag: hasFlag,
+                                    storageLength: localStorage.length
+                                };
+                            } catch (e) {
+                                return {
+                                    canWrite: false,
+                                    hasCompFlag: false,
+                                    blocked: true
+                                };
+                            }
                         }
                     """)
-                    print(f"   ✅ Storage verification: {storage_check}")
                     
-                    # If comp_388 still exists, that's the problem!
-                    has_comp_flag = await page.evaluate("""
-                        () => localStorage.getItem("comp_388") !== null
-                    """)
+                    if storage_check.get('hasCompFlag'):
+                        print(f"   ❌ CRITICAL: comp_388 flag detected! Storage override failed!")
+                        print(f"   📊 Storage state: {storage_check}")
+                        raise Exception("Storage persistence detected - cannot proceed")
                     
-                    if has_comp_flag:
-                        print(f"   ⚠️  WARNING: comp_388 flag still exists! Force removing...")
-                        await page.evaluate("""
-                            () => {
-                                localStorage.removeItem("comp_388");
-                                localStorage.clear();
-                            }
-                        """)
-                        await asyncio.sleep(0.5)
-                        
-                        # Final check
-                        still_has_flag = await page.evaluate("""
-                            () => localStorage.getItem("comp_388") !== null
-                        """)
-                        if still_has_flag:
-                            print(f"   ❌ CRITICAL: Cannot clear comp_388 flag - may need to use different browser profile")
-                        else:
-                            print(f"   ✅ comp_388 flag successfully removed")
+                    if storage_check.get('canWrite'):
+                        print(f"   ⚠️  WARNING: localStorage is still writable! Check: {storage_check}")
                     else:
-                        print(f"   ✅ No comp_388 flag detected")
+                        print(f"   ✅ Storage successfully disabled - comp_388 flag cannot be set")
                         
                 except Exception as e:
-                    print(f"   ⚠️  Storage clearing error: {e}")
+                    if "Storage persistence detected" in str(e):
+                        raise  # Re-raise critical errors
+                    print(f"   ⚠️  Storage verification error: {e}")
            
                 # Open the form
                 if not await self._open_form(page):
