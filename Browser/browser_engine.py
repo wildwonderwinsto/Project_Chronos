@@ -54,14 +54,10 @@ class BrowserEngine:
         Path("captcha_images").mkdir(exist_ok=True)
         
     async def _test_proxy(self, proxy: dict) -> bool:
-        """
-        Test if a proxy works by attempting a quick HTTPS page load
-        Returns: True if proxy works, False if it fails
-        """
+        """Test if a proxy works by attempting a quick HTTPS page load"""
         try:
             from playwright.async_api import async_playwright
             
-            # Try to load a simple HTTPS page through the proxy (to match target)
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
                 
@@ -71,8 +67,7 @@ class BrowserEngine:
                 
                 page = await context.new_page()
                 
-                # Test with HTTPS since our target uses HTTPS
-                # Use a fast, reliable HTTPS endpoint
+                # Test with a simple, fast endpoint
                 await page.goto('https://www.google.com', timeout=15000, wait_until='domcontentloaded')
                 
                 await context.close()
@@ -85,10 +80,7 @@ class BrowserEngine:
             return False
 
     async def run_single_attempt(self):
-        """
-        Execute ONE complete form submission attempt
-        Returns: (success: bool, log_id: str)
-        """
+        """Execute ONE complete form submission attempt"""
         
         # Import managers
         from Browser.proxy_manager import ProxyManager
@@ -181,10 +173,10 @@ class BrowserEngine:
                     ]
                 )
             
-                # Create context with fingerprint
+                # Create FRESH context with NO PERSISTENCE
                 context = await browser.new_context(**context_options)
                 
-                # Inject stealth scripts - COMBINED into one init script
+                # Inject stealth scripts BEFORE page creation
                 await context.add_init_script("""
                     // Remove webdriver flag
                     Object.defineProperty(navigator, 'webdriver', {
@@ -206,6 +198,26 @@ class BrowserEngine:
                             Promise.resolve({ state: Notification.permission }) :
                             originalQuery(parameters)
                     );
+                    
+                    // CRITICAL: Clear ALL storage on page load
+                    try {
+                        localStorage.clear();
+                        sessionStorage.clear();
+                        
+                        // Clear all cookies
+                        document.cookie.split(";").forEach(function(c) { 
+                            document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+                        });
+                        
+                        // Clear IndexedDB
+                        if (window.indexedDB && window.indexedDB.databases) {
+                            window.indexedDB.databases().then((dbs) => {
+                                dbs.forEach(db => window.indexedDB.deleteDatabase(db.name));
+                            });
+                        }
+                    } catch (e) {
+                        console.log('Storage clearing in init script:', e);
+                    }
                 """)
             
                 # Create page
@@ -213,28 +225,86 @@ class BrowserEngine:
 
                 print(f"   🌐 Navigating to target...")
                 
-                await page.goto(TARGET_URL, timeout=TIMING['page_load_timeout'])
+                # Navigate to the page
+                await page.goto(TARGET_URL, timeout=TIMING['page_load_timeout'], wait_until='domcontentloaded')
+                
+                # Wait for page to fully load
                 await asyncio.sleep(random.uniform(2, 3))
 
-                # Clear storage AFTER page is fully loaded with proper document context
+                # AGGRESSIVE STORAGE CLEARING AFTER PAGE LOAD
+                print(f"   🧹 Aggressively clearing all storage...")
                 try:
-                    await page.evaluate("""
-                        () => {
-                            try {
-                                localStorage.clear();
-                                sessionStorage.clear();
-                                // Clear all cookies
-                                document.cookie.split(";").forEach(function(c) { 
-                                    document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
-                                });
-                            } catch (e) {
-                                console.log('Storage clearing skipped:', e);
+                    # Clear localStorage multiple times (sometimes first clear doesn't stick)
+                    for _ in range(3):
+                        await page.evaluate("""
+                            () => {
+                                try {
+                                    localStorage.clear();
+                                    sessionStorage.clear();
+                                    
+                                    // Delete specific keys that might remain
+                                    for (let i = 0; i < localStorage.length; i++) {
+                                        const key = localStorage.key(i);
+                                        localStorage.removeItem(key);
+                                    }
+                                    
+                                    // Clear cookies aggressively
+                                    document.cookie.split(";").forEach(function(c) { 
+                                        const name = c.split("=")[0].trim();
+                                        // Clear for multiple paths and domains
+                                        document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
+                                        document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=" + window.location.hostname;
+                                        document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=." + window.location.hostname;
+                                    });
+                                    
+                                    console.log('Storage cleared');
+                                } catch (e) {
+                                    console.log('Storage clearing error:', e);
+                                }
                             }
+                        """)
+                        await asyncio.sleep(0.2)  # Small delay between clearing attempts
+                    
+                    # Verify storage is actually clear
+                    storage_check = await page.evaluate("""
+                        () => {
+                            return {
+                                localStorageKeys: Object.keys(localStorage),
+                                sessionStorageKeys: Object.keys(sessionStorage),
+                                cookieCount: document.cookie.split(';').filter(c => c.trim()).length
+                            };
                         }
                     """)
-                    print(f"   🧹 Cleared all storage and cookies")
+                    print(f"   ✅ Storage verification: {storage_check}")
+                    
+                    # If comp_388 still exists, that's the problem!
+                    has_comp_flag = await page.evaluate("""
+                        () => localStorage.getItem("comp_388") !== null
+                    """)
+                    
+                    if has_comp_flag:
+                        print(f"   ⚠️  WARNING: comp_388 flag still exists! Force removing...")
+                        await page.evaluate("""
+                            () => {
+                                localStorage.removeItem("comp_388");
+                                localStorage.clear();
+                            }
+                        """)
+                        await asyncio.sleep(0.5)
+                        
+                        # Final check
+                        still_has_flag = await page.evaluate("""
+                            () => localStorage.getItem("comp_388") !== null
+                        """)
+                        if still_has_flag:
+                            print(f"   ❌ CRITICAL: Cannot clear comp_388 flag - may need to use different browser profile")
+                        else:
+                            print(f"   ✅ comp_388 flag successfully removed")
+                    else:
+                        print(f"   ✅ No comp_388 flag detected")
+                        
                 except Exception as e:
-                    print(f"   ℹ️  Storage clearing not available: {e}")
+                    print(f"   ⚠️  Storage clearing error: {e}")
            
                 # Open the form
                 if not await self._open_form(page):
@@ -261,7 +331,7 @@ class BrowserEngine:
                 print(f"   🎯 Completing social actions...")
                 await self.social_handler.handle_actions(page)
 
-                # IMPORTANT: Verify CAPTCHA is still valid after social actions
+                # Verify CAPTCHA is still valid after social actions
                 print(f"   🔍 Verifying CAPTCHA still valid...")
                 captcha_still_valid = await self._verify_captcha_filled(page)
                 

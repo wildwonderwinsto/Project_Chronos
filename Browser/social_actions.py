@@ -31,14 +31,14 @@ class SocialActionsHandler:
                     print(f"         ⚠️  Action {action_id} link not found")
                     continue
                 
-                # Click the action - immediate close version
+                # Click action - with proper error suppression
                 print(f"         🖱️  Clicking action {action_id}...")
                 
-                if await self._click_and_close_immediately(page, selector, action_id):
+                if await self._click_and_close_silent(page, selector, action_id):
                     actions_completed += 1
                     
             except Exception as e:
-                print(f"         ❌ Error with action {action_id}: {str(e)[:50]}")
+                print(f"         ⚠️  Error with action {action_id}: {str(e)[:40]}")
                 continue
         
         print(f"      📊 Completed {actions_completed}/{len(self.ACTION_IDS)} social actions")
@@ -56,28 +56,39 @@ class SocialActionsHandler:
             }}
         ''')
     
-    async def _click_and_close_immediately(self, page: Page, selector: str, action_id: str):
-        """Click action and close popup instantly - no waiting"""
+    async def _click_and_close_silent(self, page: Page, selector: str, action_id: str):
+        """
+        Click action and handle popup silently - no asyncio warnings
+        This uses a different approach that doesn't leave uncaught tasks
+        """
         try:
-            # Create a promise to catch the popup
-            popup_task = asyncio.create_task(page.wait_for_event('popup', timeout=1000))
+            # Create a popup handler BEFORE clicking
+            popup_caught = False
+            
+            async def popup_handler(popup):
+                nonlocal popup_caught
+                popup_caught = True
+                try:
+                    await popup.close()
+                except:
+                    pass
+            
+            # Register the handler
+            page.on('popup', popup_handler)
             
             # Click the link
-            await page.click(selector, timeout=1000)
-            
-            # Try to close popup immediately without waiting for it to load
             try:
-                popup = await popup_task
-                # Close IMMEDIATELY - don't wait for anything
-                await popup.close()
-            except asyncio.TimeoutError:
-                # No popup appeared - that's fine, action might still register
-                pass
+                await page.click(selector, timeout=1000)
             except Exception:
-                # Popup already closed or other issue - ignore
-                pass
+                pass  # Click timeout is fine
             
-            # Tiny delay for action to register (100ms)
+            # Wait briefly for popup to appear (if it will)
+            await asyncio.sleep(0.3)
+            
+            # Remove handler
+            page.remove_listener('popup', popup_handler)
+            
+            # Small delay for action to register
             await asyncio.sleep(0.1)
             
             # Check if it registered
@@ -85,9 +96,9 @@ class SocialActionsHandler:
                 print(f"         ✅ Action {action_id} completed!")
                 return True
             else:
-                # Some actions register even if check doesn't show it immediately
+                # Some actions register even without visual confirmation
                 print(f"         ℹ️  Action {action_id} clicked")
-                return True  # Count it anyway
+                return True
                 
         except Exception as e:
             print(f"         ⚠️  Action {action_id}: {str(e)[:40]}")
