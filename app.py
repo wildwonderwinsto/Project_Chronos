@@ -4,7 +4,7 @@ import threading
 import asyncio
 import io
 from datetime import datetime, timedelta
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -12,6 +12,7 @@ import pytz
 
 # IMPORT YOUR SCHEDULER
 from scheduler_engine import ChronoScheduler
+from email_config_manager import EmailConfigManager
 
 load_dotenv()
 
@@ -24,6 +25,9 @@ SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 TIMEZONE = pytz.timezone('America/New_York')
+
+# Email manager
+email_manager = EmailConfigManager()
 
 # ==========================================
 # 🔌 LOGGING INTERCEPTOR (The Magic Part)
@@ -104,13 +108,17 @@ def start_background_worker():
         thread.start()
 
 # ==========================================
-# 🌐 FLASK ROUTES
+# 🌐 FLASK ROUTES - PAGES
 # ==========================================
 
 @app.route('/')
 def dashboard():
     """Main dashboard page"""
     return render_template('dashboard.html')
+
+# ==========================================
+# 🌐 FLASK ROUTES - API
+# ==========================================
 
 @app.route('/api/stats')
 def get_stats():
@@ -120,7 +128,7 @@ def get_stats():
         status_result = supabase.table('bot_status').select('*').limit(1).execute()
         bot_status = status_result.data[0] if status_result.data else {}
         
-        # Get total counts from attempt_logs (simple count)
+        # Get total counts from attempt_logs
         logs = supabase.table('attempt_logs').select('status', count='exact').execute()
         
         total_attempts = len(logs.data)
@@ -185,7 +193,6 @@ def get_hourly_chart():
         
         hourly_data = {}
         for log in logs.data:
-            # Handle potential Z format or missing +00:00
             ts_str = log['timestamp'].replace('Z', '+00:00')
             timestamp = datetime.fromisoformat(ts_str)
             hour_key = timestamp.strftime('%Y-%m-%d %H:00')
@@ -250,8 +257,14 @@ def search_logs():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/live-logs')
+def get_live_logs():
+    """Get live terminal logs (intercepted from stdout)"""
+    return jsonify({'logs': live_logs[-100:]})
+
 @app.route('/api/clear-database', methods=['POST'])
 def clear_database():
+    """Clear all database records"""
     try:
         data = request.get_json()
         password = data.get('password')
@@ -270,25 +283,9 @@ def clear_database():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/live-logs')
-def get_live_logs():
-    """Get live terminal logs (intercepted from stdout)"""
-    return jsonify({'logs': live_logs[-100:]})
-
-@app.route('/api/add-log', methods=['POST'])
-def add_live_log():
-    """Endpoint to manually add logs (if needed)"""
-    try:
-        data = request.get_json()
-        print(f"[{data.get('level', 'INFO')}] {data.get('message', '')}")
-        return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-# Add these routes to your app.py file
-
-from email_config_manager import EmailConfigManager
-
-email_manager = EmailConfigManager()
+# ==========================================
+# 📧 EMAIL CONFIGURATION API
+# ==========================================
 
 @app.route('/api/emails')
 def get_emails():
@@ -308,7 +305,6 @@ def add_email():
         domain = data.get('domain')
         email_account = data.get('email_account')
         
-        # Verify admin password
         if password != os.getenv('ADMIN_PASSWORD', 'chronos2025'):
             return jsonify({'error': 'Invalid password'}), 403
         
@@ -334,7 +330,6 @@ def toggle_email():
         domain = data.get('domain')
         active = data.get('active', True)
         
-        # Verify admin password
         if password != os.getenv('ADMIN_PASSWORD', 'chronos2025'):
             return jsonify({'error': 'Invalid password'}), 403
         
@@ -360,7 +355,6 @@ def delete_email():
         password = data.get('password')
         domain = data.get('domain')
         
-        # Verify admin password
         if password != os.getenv('ADMIN_PASSWORD', 'chronos2025'):
             return jsonify({'error': 'Invalid password'}), 403
         
@@ -376,6 +370,83 @@ def delete_email():
             
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/emails/current')
+def get_current_emails():
+    """Get currently active email accounts being used"""
+    try:
+        active_emails = email_manager.get_master_emails()
+        return jsonify({'active_emails': active_emails})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ==========================================
+# 📸 SCREENSHOT & CAPTCHA IMAGE VIEWER
+# ==========================================
+
+@app.route('/api/screenshots')
+def list_screenshots():
+    """List all available screenshots"""
+    try:
+        import os
+        screenshots = []
+        
+        if os.path.exists('screenshots'):
+            for filename in sorted(os.listdir('screenshots'), reverse=True)[:50]:
+                if filename.endswith('.png'):
+                    log_id = filename.replace('.png', '')
+                    screenshots.append({
+                        'log_id': log_id,
+                        'filename': filename,
+                        'url': f'/screenshots/{filename}'
+                    })
+        
+        return jsonify({'screenshots': screenshots})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/captcha-images')
+def list_captcha_images():
+    """List all CAPTCHA images"""
+    try:
+        import os
+        captcha_images = {}
+        
+        if os.path.exists('captcha_images'):
+            for filename in sorted(os.listdir('captcha_images'), reverse=True):
+                if filename.endswith('.png'):
+                    # Parse filename: log_id_attempt1_original.png
+                    parts = filename.replace('.png', '').split('_')
+                    if len(parts) >= 2:
+                        log_id = parts[0]
+                        
+                        if log_id not in captcha_images:
+                            captcha_images[log_id] = []
+                        
+                        captcha_images[log_id].append({
+                            'filename': filename,
+                            'url': f'/captcha-images/{filename}',
+                            'type': 'preprocessed' if 'preprocessed' in filename or any(s in filename for s in ['high_contrast', 'ultra_sharp', 'denoised', 'inverted', 'adaptive']) else 'original'
+                        })
+        
+        return jsonify({'captcha_images': captcha_images})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Serve static files from screenshots and captcha_images directories
+@app.route('/screenshots/<path:filename>')
+def serve_screenshot(filename):
+    """Serve screenshot files"""
+    return send_from_directory('screenshots', filename)
+
+@app.route('/captcha-images/<path:filename>')
+def serve_captcha_image(filename):
+    """Serve CAPTCHA image files"""
+    return send_from_directory('captcha_images', filename)
+
+# ==========================================
+# 🚀 STARTUP
+# ==========================================
 
 if __name__ == '__main__':
     # START THE SCHEDULER
