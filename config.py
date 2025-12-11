@@ -44,8 +44,8 @@ BROWSER_CONFIG = {
 
 # ===== PROXY CONFIGURATION =====
 PROXY_CONFIG = {
-    "max_attempts": 15,  # Try up to 15 proxies before falling back to direct connection
-    "test_timeout": 15000,  # Timeout for proxy testing (milliseconds)
+    "max_attempts": 100,  # Try up to 15 proxies before falling back to direct connection
+    "test_timeout": 9000,  # Timeout for proxy testing (milliseconds)
     "us_only": True  # Only use US-based proxies
 }
 
@@ -86,8 +86,8 @@ SCHEDULING = {
     # ===== INCREASED BASE FREQUENCY FOR MORE ENTRIES =====
     # OLD: 2.0/hr day, 0.5/hr night = ~19,000 total entries
     # NEW: 4.0/hr day, 1.0/hr night = ~38,000 total entries
-    "day_mode_base_frequency": 4.0,      # 4 entries/hour during day (was 2.0)
-    "night_mode_base_frequency": 1.0,    # 1 entry/hour at night (was 0.5)
+    "day_mode_base_frequency": 1,      # 4 entries/hour during day (was 2.0)
+    "night_mode_base_frequency": 0.25,    # 1 entry/hour at night (was 0.5)
     
     # Volume ramp-up settings
     "casual_multiplier": 1.0,            # Multiply base frequency by this at start
