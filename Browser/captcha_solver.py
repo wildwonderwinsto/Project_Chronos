@@ -54,7 +54,7 @@ class CaptchaSolver:
     
     async def _ocr_captcha(self, page: Page, log_id: str) -> Optional[str]:
         """
-        Read CAPTCHA with ONE preprocessing strategy optimized for YCEQ-style text
+        Read CAPTCHA optimized for 4-letter uppercase CAPTCHAs like YCFQ
         """
         try:
             # Get CAPTCHA image
@@ -73,63 +73,79 @@ class CaptchaSolver:
             # Open with PIL
             image = Image.open(io.BytesIO(screenshot_bytes))
             
-            # === SINGLE PREPROCESSING STRATEGY ===
-            # Optimized for noisy CAPTCHAs with dots like "KAEH"
+            # === PREPROCESSING FOR 4-LETTER CAPTCHA ===
             
-            # 1. Upscale 4x for better OCR (larger = better noise removal)
+            # 1. Upscale 3x
             width, height = image.size
-            image = image.resize((width * 4, height * 4), Image.LANCZOS)
+            image = image.resize((width * 3, height * 3), Image.LANCZOS)
             
             # 2. Convert to grayscale
             image = image.convert('L')
             
-            # 3. AGGRESSIVE noise removal FIRST (removes dots)
-            image = image.filter(ImageFilter.MedianFilter(size=5))
-            
-            # 4. Increase contrast to make letters darker
-            enhancer = ImageEnhance.Contrast(image)
-            image = enhancer.enhance(4.0)
-            
-            # 5. Binary threshold - LOWER to keep letter pixels
-            threshold = 100
-            image = image.point(lambda p: 0 if p < threshold else 255)
-            
-            # 6. Remove any remaining small noise
+            # 3. Light noise removal (preserves letter edges)
             image = image.filter(ImageFilter.MedianFilter(size=3))
             
-            # 7. Sharpen the letters
-            enhancer = ImageEnhance.Sharpness(image)
+            # 4. Increase contrast
+            enhancer = ImageEnhance.Contrast(image)
             image = enhancer.enhance(2.5)
+            
+            # 5. Binary threshold
+            threshold = 140
+            image = image.point(lambda p: 0 if p < threshold else 255)
+            
+            # 6. Clean up
+            image = image.filter(ImageFilter.MedianFilter(size=3))
+            
+            # 7. Ensure black text on white background
+            pixels = list(image.getdata())
+            if sum(pixels) / len(pixels) < 128:
+                image = Image.eval(image, lambda x: 255 - x)
             
             # Save preprocessed
             processed_path = f"captcha_images/{log_id}_processed.png"
             image.save(processed_path)
             
-            # === OCR WITH SIMPLE CONFIG ===
-            # Letters only, single line mode
-            LETTERS_ONLY = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+            # === OCR - EXACTLY 4 UPPERCASE LETTERS ===
+            LETTERS_ONLY = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
             
-            text = pytesseract.image_to_string(
-                image,
-                config=f'--psm 7 --oem 3 -c tessedit_char_whitelist={LETTERS_ONLY}'
-            )
+            best_result = None
             
-            # Clean result
-            captcha_text = re.sub(r'[^a-zA-Z]', '', text).strip().upper()
+            # Try multiple PSM modes
+            for psm in [7, 8, 13, 6]:
+                try:
+                    text = pytesseract.image_to_string(
+                        image,
+                        config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist={LETTERS_ONLY}'
+                    )
+                    cleaned = re.sub(r'[^A-Z]', '', text.upper()).strip()
+                    
+                    # Perfect match - exactly 4 letters
+                    if len(cleaned) == 4:
+                        return cleaned
+                    
+                    # Store closest result
+                    if cleaned and (best_result is None or abs(len(cleaned) - 4) < abs(len(best_result) - 4)):
+                        best_result = cleaned
+                        
+                except:
+                    pass
             
-            # Validate length (CAPTCHAs are usually 4-6 chars)
-            if len(captcha_text) < 4:
-                return None
+            # If we got something close, try to fix it
+            if best_result:
+                if len(best_result) > 4:
+                    # Take first 4
+                    return best_result[:4]
+                elif len(best_result) == 3:
+                    # Too short - still return it, might work
+                    print(f"   ⚠️  Only got 3 letters: {best_result}")
+                    return best_result
             
-            if len(captcha_text) > 8:
-                captcha_text = captcha_text[:6]  # Truncate if too long
-            
-            return captcha_text
+            return None
             
         except Exception as e:
             print(f"   ❌ OCR error: {e}")
             return None
-    
+
     async def _solve_manually(self, page: Page) -> bool:
         """Manual CAPTCHA solving"""
         print(f"   🖐️  MANUAL MODE - Type the CAPTCHA")

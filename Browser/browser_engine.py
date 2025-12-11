@@ -79,6 +79,48 @@ class BrowserEngine:
             print(f"      ⚠️  Proxy test failed: {str(e)[:60]}")
             return False
 
+    async def _get_working_proxy(self, proxy_mgr):
+        """
+        Keep trying to get a working proxy until one is found.
+        Will refresh proxy list if needed and NEVER return None.
+        """
+        max_consecutive_failures = 50  # After 50 failed proxies, refresh the list
+        consecutive_failures = 0
+        attempt = 0
+        
+        while True:
+            attempt += 1
+            
+            # Get a candidate proxy
+            candidate_proxy = await proxy_mgr.get_proxy()
+            
+            if not candidate_proxy:
+                print(f"   ⚠️  No more proxies in cache, forcing refresh...")
+                # Force refresh the proxy list
+                await proxy_mgr._refresh_proxy_list()
+                consecutive_failures = 0
+                continue
+            
+            # Test if proxy works
+            print(f"   🔍 Testing proxy #{attempt}: {candidate_proxy['ip']}...")
+            
+            if await self._test_proxy(candidate_proxy):
+                print(f"   ✅ Proxy validated after {attempt} attempts!")
+                return candidate_proxy
+            else:
+                print(f"   ❌ Proxy failed, trying next...")
+                proxy_mgr.mark_proxy_failed(candidate_proxy['server'])
+                consecutive_failures += 1
+                
+                # If we've failed too many times, refresh the proxy list
+                if consecutive_failures >= max_consecutive_failures:
+                    print(f"   ⚠️  {consecutive_failures} consecutive failures, refreshing proxy list...")
+                    await proxy_mgr._refresh_proxy_list()
+                    consecutive_failures = 0
+                
+                # Small delay to avoid hammering
+                await asyncio.sleep(0.5)
+
     async def run_single_attempt(self):
         """Execute ONE complete form submission attempt"""
         
@@ -96,34 +138,12 @@ class BrowserEngine:
         proxy_mgr = ProxyManager()
         fingerprint_mgr = FingerprintManager()
         
-        # Try to get a working proxy - keep trying until proxies are exhausted
-        proxy = None
-        max_proxy_attempts = PROXY_CONFIG['max_attempts']  # From config
+        # Get a working proxy - will NEVER return None
+        print(f"   🌐 Finding working proxy...")
+        proxy = await self._get_working_proxy(proxy_mgr)
         
-        for attempt in range(max_proxy_attempts):
-            candidate_proxy = await proxy_mgr.get_proxy()
-            
-            if not candidate_proxy:
-                print(f"   ⚠️  No more proxies available (tried {attempt} proxies)")
-                break
-            
-            # Test if proxy works
-            print(f"   🔍 Testing proxy {attempt + 1}/{max_proxy_attempts}: {candidate_proxy['ip']}...")
-            if await self._test_proxy(candidate_proxy):
-                proxy = candidate_proxy
-                print(f"   ✅ Proxy validated!")
-                break
-            else:
-                print(f"   ❌ Proxy failed, trying next...")
-                proxy_mgr.mark_proxy_failed(candidate_proxy['server'])
-        
-        if proxy:
-            print(f"   🌐 Using proxy: {proxy['ip']} ({proxy['city']}, {proxy['country']})")
-            fingerprint = fingerprint_mgr.generate_fingerprint(timezone=proxy['timezone'])
-        else:
-            print(f"   🌐 Using direct connection (no working proxy found after trying {max_proxy_attempts} proxies)")
-            fingerprint = fingerprint_mgr.generate_fingerprint()
-            proxy = None
+        print(f"   ✅ Using proxy: {proxy['ip']} ({proxy['city']}, {proxy['country']})")
+        fingerprint = fingerprint_mgr.generate_fingerprint(timezone=proxy['timezone'])
         
         print(f"   🎭 Fingerprint: {fingerprint['browser_type'].title()} on {fingerprint['platform']}")
         print(f"   🕐 Timezone: {fingerprint['timezone']}")
@@ -135,8 +155,7 @@ class BrowserEngine:
                 return False, None
             
             # Log proxy info
-            if proxy:
-                await self._log_proxy_info(log_id, proxy)
+            await self._log_proxy_info(log_id, proxy)
         else:
             log_id = "TEST_MODE"
             print(f"   Test Mode: Skipping database log")
@@ -152,14 +171,11 @@ class BrowserEngine:
                     'locale': fingerprint['locale'],
                     'permissions': [],
                     'geolocation': None,
-                    'color_scheme': random.choice(['light', 'dark', 'no-preference'])
-                }
-                
-                # Add proxy if available
-                if proxy:
-                    context_options['proxy'] = {
+                    'color_scheme': random.choice(['light', 'dark', 'no-preference']),
+                    'proxy': {
                         'server': proxy['server']
                     }
+                }
                 
                 # Launch browser
                 browser = await p.chromium.launch(
