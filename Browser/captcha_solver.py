@@ -52,9 +52,46 @@ class CaptchaSolver:
             print(f"   ❌ CAPTCHA error: {e}")
             return False
     
+    def _apply_adaptive_threshold(self, image: Image.Image) -> Image.Image:
+        """Apply adaptive thresholding using local pixel analysis"""
+        import numpy as np
+        img_array = np.array(image)
+        
+        # Calculate local threshold using block mean
+        block_size = 15
+        h, w = img_array.shape
+        output = np.zeros_like(img_array)
+        
+        for i in range(h):
+            for j in range(w):
+                # Define local region
+                y1 = max(0, i - block_size // 2)
+                y2 = min(h, i + block_size // 2 + 1)
+                x1 = max(0, j - block_size // 2)
+                x2 = min(w, j + block_size // 2 + 1)
+                
+                local_mean = np.mean(img_array[y1:y2, x1:x2])
+                # Threshold with offset for better text detection
+                threshold = local_mean - 10
+                output[i, j] = 255 if img_array[i, j] > threshold else 0
+        
+        return Image.fromarray(output)
+    
+    def _fix_common_confusions(self, text: str) -> str:
+        """Fix common OCR character confusions for uppercase letters"""
+        # Common misreads in CAPTCHA OCR
+        fixes = {
+            '0': 'O', '1': 'I', '5': 'S', '8': 'B',
+            '6': 'G', '2': 'Z', '4': 'A', '7': 'T',
+        }
+        result = ''
+        for char in text.upper():
+            result += fixes.get(char, char)
+        return result
+
     async def _ocr_captcha(self, page: Page, log_id: str) -> Optional[str]:
         """
-        Read CAPTCHA optimized for 4-letter uppercase CAPTCHAs like YCFQ
+        Read CAPTCHA optimized for 4-letter uppercase CAPTCHAs
         """
         try:
             # Get CAPTCHA image
@@ -73,30 +110,41 @@ class CaptchaSolver:
             # Open with PIL
             image = Image.open(io.BytesIO(screenshot_bytes))
             
-            # === PREPROCESSING FOR 4-LETTER CAPTCHA ===
+            # === IMPROVED PREPROCESSING FOR 4-LETTER CAPTCHA ===
             
-            # 1. Upscale 3x
+            # 1. Upscale 4x for better detail preservation
             width, height = image.size
-            image = image.resize((width * 3, height * 3), Image.LANCZOS)
+            image = image.resize((width * 4, height * 4), Image.LANCZOS)
             
             # 2. Convert to grayscale
             image = image.convert('L')
             
-            # 3. Light noise removal (preserves letter edges)
+            # 3. Sharpen BEFORE noise removal to preserve edges
+            image = image.filter(ImageFilter.SHARPEN)
+            image = image.filter(ImageFilter.SHARPEN)
+            
+            # 4. Light noise removal
             image = image.filter(ImageFilter.MedianFilter(size=3))
             
-            # 4. Increase contrast
+            # 5. Moderate contrast enhancement
             enhancer = ImageEnhance.Contrast(image)
-            image = enhancer.enhance(2.5)
+            image = enhancer.enhance(1.8)
             
-            # 5. Binary threshold
-            threshold = 140
-            image = image.point(lambda p: 0 if p < threshold else 255)
+            # 6. Brightness adjustment
+            brightness = ImageEnhance.Brightness(image)
+            image = brightness.enhance(1.1)
             
-            # 6. Clean up
+            # 7. Apply adaptive thresholding
+            image = self._apply_adaptive_threshold(image)
+            
+            # 8. Morphological cleanup - erode then dilate to remove noise
+            image = image.filter(ImageFilter.MinFilter(size=3))
+            image = image.filter(ImageFilter.MaxFilter(size=3))
+            
+            # 9. Final cleanup
             image = image.filter(ImageFilter.MedianFilter(size=3))
             
-            # 7. Ensure black text on white background
+            # 10. Ensure black text on white background
             pixels = list(image.getdata())
             if sum(pixels) / len(pixels) < 128:
                 image = Image.eval(image, lambda x: 255 - x)
@@ -109,35 +157,76 @@ class CaptchaSolver:
             LETTERS_ONLY = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
             
             best_result = None
+            best_confidence = 0
             
-            # Try multiple PSM modes
-            for psm in [7, 8, 13, 6]:
+            # Try multiple PSM modes with different configs
+            configs = [
+                (7, '--oem 3'),   # Single text line
+                (8, '--oem 3'),   # Single word
+                (13, '--oem 3'),  # Raw line
+                (6, '--oem 3'),   # Uniform block
+                (7, '--oem 1'),   # LSTM only
+                (8, '--oem 1'),
+            ]
+            
+            for psm, oem_config in configs:
+                try:
+                    # Get text with confidence data
+                    data = pytesseract.image_to_data(
+                        image,
+                        config=f'--psm {psm} {oem_config} -c tessedit_char_whitelist={LETTERS_ONLY}',
+                        output_type=pytesseract.Output.DICT
+                    )
+                    
+                    # Extract text and confidence
+                    texts = [t for t in data['text'] if t.strip()]
+                    confs = [c for c, t in zip(data['conf'], data['text']) if t.strip() and c != -1]
+                    
+                    if texts:
+                        raw_text = ''.join(texts)
+                        cleaned = re.sub(r'[^A-Z0-9]', '', raw_text.upper()).strip()
+                        cleaned = self._fix_common_confusions(cleaned)
+                        avg_conf = sum(confs) / len(confs) if confs else 0
+                        
+                        # Perfect match - exactly 4 letters with good confidence
+                        if len(cleaned) == 4 and avg_conf > 60:
+                            return cleaned
+                        
+                        # Track best result
+                        if len(cleaned) >= 3 and (avg_conf > best_confidence or 
+                            (abs(len(cleaned) - 4) < abs(len(best_result or '') - 4))):
+                            best_result = cleaned
+                            best_confidence = avg_conf
+                        
+                except Exception:
+                    pass
+            
+            # Fallback: simple string extraction
+            for psm in [7, 8, 13]:
                 try:
                     text = pytesseract.image_to_string(
                         image,
-                        config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist={LETTERS_ONLY}'
+                        config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist={LETTERS_ONLY}0123456789'
                     )
-                    cleaned = re.sub(r'[^A-Z]', '', text.upper()).strip()
+                    cleaned = re.sub(r'[^A-Z0-9]', '', text.upper()).strip()
+                    cleaned = self._fix_common_confusions(cleaned)
                     
-                    # Perfect match - exactly 4 letters
                     if len(cleaned) == 4:
                         return cleaned
                     
-                    # Store closest result
                     if cleaned and (best_result is None or abs(len(cleaned) - 4) < abs(len(best_result) - 4)):
                         best_result = cleaned
-                        
-                except:
+                except Exception:
                     pass
             
-            # If we got something close, try to fix it
+            # Return best result, adjusted to 4 chars
             if best_result:
                 if len(best_result) > 4:
-                    # Take first 4
                     return best_result[:4]
                 elif len(best_result) == 3:
-                    # Too short - still return it, might work
                     print(f"   ⚠️  Only got 3 letters: {best_result}")
+                    return best_result
+                elif len(best_result) == 4:
                     return best_result
             
             return None
