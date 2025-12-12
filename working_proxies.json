@@ -1,0 +1,213 @@
+{
+  "last_updated": "2025-12-11T21:34:30.521656",
+  "total_proxies": 23,
+  "proxies": [
+    {
+      "server": "http://184.168.47.209:80",
+      "ip": "184.168.47.209",
+      "country": "US",
+      "city": "Tempe",
+      "state": "Arizona",
+      "timezone": "America/Phoenix",
+      "isp": "GoDaddy.com, LLC"
+    },
+    {
+      "server": "http://199.34.229.68:80",
+      "ip": "199.34.229.68",
+      "country": "US",
+      "city": "Oakland",
+      "state": "California",
+      "timezone": "America/Los_Angeles",
+      "isp": "Weebly, Inc."
+    },
+    {
+      "server": "http://199.34.229.21:80",
+      "ip": "199.34.229.21",
+      "country": "US",
+      "city": "Oakland",
+      "state": "California",
+      "timezone": "America/Los_Angeles",
+      "isp": "Weebly, Inc."
+    },
+    {
+      "server": "http://8.35.211.129:80",
+      "ip": "8.35.211.129",
+      "country": "US",
+      "city": "San Francisco",
+      "state": "California",
+      "timezone": "America/Los_Angeles",
+      "isp": "Cloudflare, Inc."
+    },
+    {
+      "server": "http://172.67.74.36:80",
+      "ip": "172.67.74.36",
+      "country": "US",
+      "city": "San Francisco",
+      "state": "California",
+      "timezone": "America/Los_Angeles",
+      "isp": "Cloudflare, Inc."
+    },
+    {
+      "server": "http://170.114.45.1:80",
+      "ip": "170.114.45.1",
+      "country": "US",
+      "city": "San Jose",
+      "state": "California",
+      "timezone": "America/Los_Angeles",
+      "isp": "Cloudflare London, LLC"
+    },
+    {
+      "server": "http://170.114.46.119:80",
+      "ip": "170.114.46.119",
+      "country": "US",
+      "city": "San Jose",
+      "state": "California",
+      "timezone": "America/Los_Angeles",
+      "isp": "Cloudflare London, LLC"
+    },
+    {
+      "server": "http://170.114.46.132:80",
+      "ip": "170.114.46.132",
+      "country": "US",
+      "city": "San Jose",
+      "state": "California",
+      "timezone": "America/Los_Angeles",
+      "isp": "Cloudflare London, LLC"
+    },
+    {
+      "server": "http://170.114.45.146:80",
+      "ip": "170.114.45.146",
+      "country": "US",
+      "city": "San Jose",
+      "state": "California",
+      "timezone": "America/Los_Angeles",
+      "isp": "Cloudflare London, LLC"
+    },
+    {
+      "server": "http://170.114.45.105:80",
+      "ip": "170.114.45.105",
+      "country": "US",
+      "city": "San Jose",
+      "state": "California",
+      "timezone": "America/Los_Angeles",
+      "isp": "Cloudflare London, LLC"
+    },
+    {
+      "server": "http://66.225.252.120:80",
+      "ip": "66.225.252.120",
+      "country": "US",
+      "city": "Wilmington",
+      "state": "Delaware",
+      "timezone": "America/New_York",
+      "isp": "Ipxo LLC"
+    },
+    {
+      "server": "http://45.194.53.220:80",
+      "ip": "45.194.53.220",
+      "country": "US",
+      "city": "Washington",
+      "state": "District of Columbia",
+      "timezone": "America/New_York",
+      "isp": "Softmedia Entertainment Solutions"
+    },
+    {
+      "server": "http://45.194.53.160:80",
+      "ip": "45.194.53.160",
+      "country": "US",
+      "city": "Washington",
+      "state": "District of Columbia",
+      "timezone": "America/New_York",
+      "isp": "Softmedia Entertainment Solutions"
+    },
+    {
+      "server": "http://69.84.182.89:80",
+      "ip": "69.84.182.89",
+      "country": "US",
+      "city": "Boca Raton",
+      "state": "Florida",
+      "timezone": "America/New_York",
+      "isp": "Health Market Science"
+    },
+    {
+      "server": "http://216.205.52.135:80",
+      "ip": "216.205.52.135",
+      "country": "US",
+      "city": "New York",
+      "state": "New York",
+      "timezone": "America/New_York",
+      "isp": "Cloudflare London, LLC"
+    },
+    {
+      "server": "http://159.112.235.7:80",
+      "ip": "159.112.235.7",
+      "country": "US",
+      "city": "Pittsburgh",
+      "state": "Pennsylvania",
+      "timezone": "America/New_York",
+      "isp": "Cloudflare London, LLC"
+    },
+    {
+      "server": "http://141.193.213.13:80",
+      "ip": "141.193.213.13",
+      "country": "US",
+      "city": "Austin",
+      "state": "Texas",
+      "timezone": "America/Chicago",
+      "isp": "Cloudflare London, LLC"
+    },
+    {
+      "server": "http://63.141.128.139:80",
+      "ip": "63.141.128.139",
+      "country": "US",
+      "city": "Austin",
+      "state": "Texas",
+      "timezone": "America/Chicago",
+      "isp": "Bigcommerce Inc."
+    },
+    {
+      "server": "http://141.193.213.249:80",
+      "ip": "141.193.213.249",
+      "country": "US",
+      "city": "Austin",
+      "state": "Texas",
+      "timezone": "America/Chicago",
+      "isp": "Cloudflare London, LLC"
+    },
+    {
+      "server": "http://141.193.213.141:80",
+      "ip": "141.193.213.141",
+      "country": "US",
+      "city": "Austin",
+      "state": "Texas",
+      "timezone": "America/Chicago",
+      "isp": "Cloudflare London, LLC"
+    },
+    {
+      "server": "http://162.240.19.30:80",
+      "ip": "162.240.19.30",
+      "country": "US",
+      "city": "Provo",
+      "state": "Utah",
+      "timezone": "America/Denver",
+      "isp": "Unified Layer"
+    },
+    {
+      "server": "http://108.162.198.134:80",
+      "ip": "108.162.198.134",
+      "country": "US",
+      "city": "Ashburn",
+      "state": "Virginia",
+      "timezone": "America/New_York",
+      "isp": "Cloudflare, Inc."
+    },
+    {
+      "server": "http://108.162.198.249:80",
+      "ip": "108.162.198.249",
+      "country": "US",
+      "city": "Ashburn",
+      "state": "Virginia",
+      "timezone": "America/New_York",
+      "isp": "Cloudflare, Inc."
+    }
+  ]
+}
