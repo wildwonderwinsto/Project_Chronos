@@ -1,5 +1,6 @@
 import random
-import requests
+import asyncio
+import aiohttp
 import json
 from typing import Optional, Dict, List
 from datetime import datetime, timedelta
@@ -7,280 +8,345 @@ from pathlib import Path
 
 
 class ProxyManager:
-    """Enhanced proxy manager with GeoIP lookup and better error handling"""
+    """Improved proxy manager with better scraping and smarter caching"""
     
     def __init__(self):
         self.working_proxies: List[Dict] = []
-        self.failed_proxies: set = set()
+        self.failed_proxies: Dict[str, datetime] = {}  # Track when proxy failed
         self.used_this_session: set = set()
         self.cache_file = Path("working_proxies.json")
         self.last_refresh = None
-        self.refresh_interval = timedelta(hours=6)
         
-        # Load cached working proxies
+        # Failed proxy cooldown - retry after 1 hour
+        self.failed_cooldown = timedelta(hours=1)
+        
         self._load_cache()
     
     def _load_cache(self):
-        """Load previously working proxies from cache"""
+        """Load cached proxies"""
         if self.cache_file.exists():
             try:
                 with open(self.cache_file, 'r') as f:
                     data = json.load(f)
                     self.working_proxies = data.get('proxies', [])
-                    # Ensure all proxies have required fields
-                    self.working_proxies = [p for p in self.working_proxies if self._validate_proxy_dict(p)]
-                    print(f"   ✅ Loaded {len(self.working_proxies)} cached working proxies")
+                    self.working_proxies = [p for p in self.working_proxies if self._validate_proxy(p)]
+                    print(f"   📦 Loaded {len(self.working_proxies)} cached proxies")
             except Exception as e:
-                print(f"   ⚠️  Failed to load cache: {e}")
+                print(f"   ⚠️  Cache load failed: {e}")
                 self.working_proxies = []
     
-    def _validate_proxy_dict(self, proxy: Dict) -> bool:
-        """Ensure proxy dict has all required fields"""
+    def _validate_proxy(self, proxy: Dict) -> bool:
+        """Check proxy has required fields"""
         required = ['server', 'ip', 'country', 'city', 'state', 'timezone']
         return all(key in proxy for key in required)
     
     def _save_cache(self):
-        """Save working proxies to cache with nice formatting"""
+        """Save proxies to cache"""
         try:
-            # Sort proxies by state, then city for easier reading
             sorted_proxies = sorted(
                 self.working_proxies,
-                key=lambda p: (p.get('state', 'ZZZ'), p.get('city', 'ZZZ'))
+                key=lambda p: (p.get('state', ''), p.get('city', ''))
             )
-            
             with open(self.cache_file, 'w') as f:
                 json.dump({
                     'last_updated': datetime.now().isoformat(),
                     'total_proxies': len(sorted_proxies),
                     'proxies': sorted_proxies
-                }, f, indent=2, sort_keys=False)
-            
-            print(f"   💾 Saved {len(sorted_proxies)} proxies to cache")
+                }, f, indent=2)
         except Exception as e:
-            print(f"   ⚠️  Failed to save cache: {e}")
+            print(f"   ⚠️  Cache save failed: {e}")
     
-    def _enrich_proxy_with_geoip(self, proxy_dict: Dict) -> Dict:
-        """
-        Enrich proxy with geographic data using free GeoIP API
-        Falls back to defaults if API fails
-        """
-        ip = proxy_dict.get('ip')
+    def _clean_failed_proxies(self):
+        """Remove old entries from failed proxies (allow retry after cooldown)"""
+        now = datetime.now()
+        expired = [k for k, v in self.failed_proxies.items() if now - v > self.failed_cooldown]
+        for k in expired:
+            del self.failed_proxies[k]
+    
+    async def get_proxy(self) -> Optional[Dict]:
+        """Get a proxy to use"""
+        self._clean_failed_proxies()
         
-        # Default values
+        # Get available proxies (not failed, not used this session)
+        available = [
+            p for p in self.working_proxies
+            if p['server'] not in self.failed_proxies
+            and p['server'] not in self.used_this_session
+        ]
+        
+        # If none available, reset session usage
+        if not available:
+            self.used_this_session.clear()
+            available = [
+                p for p in self.working_proxies
+                if p['server'] not in self.failed_proxies
+            ]
+        
+        # If still none, need to refresh
+        if not available:
+            print(f"   ⚠️  No available proxies, refreshing...")
+            await self._refresh_proxy_list()
+            available = [
+                p for p in self.working_proxies
+                if p['server'] not in self.failed_proxies
+            ]
+        
+        if not available:
+            return None
+        
+        proxy = random.choice(available)
+        self.used_this_session.add(proxy['server'])
+        return proxy
+    
+    async def _fetch_url(self, session: aiohttp.ClientSession, url: str, timeout: int = 10) -> Optional[str]:
+        """Fetch URL content"""
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                if resp.status == 200:
+                    return await resp.text()
+        except Exception:
+            pass
+        return None
+    
+    async def _get_geoip(self, session: aiohttp.ClientSession, ip: str) -> Dict:
+        """Get GeoIP data for an IP"""
         defaults = {
             'country': 'US',
             'city': 'Unknown',
-            'state': 'Unknown',
+            'state': 'Unknown', 
             'timezone': 'America/New_York',
             'isp': 'Unknown'
         }
         
-        # Try multiple free GeoIP services
-        geoip_services = [
-            f"http://ip-api.com/json/{ip}?fields=status,country,countryCode,region,regionName,city,timezone,isp",
-            f"https://ipapi.co/{ip}/json/",
-        ]
+        try:
+            url = f"http://ip-api.com/json/{ip}?fields=status,countryCode,regionName,city,timezone,isp"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get('status') == 'success':
+                        return {
+                            'country': data.get('countryCode', 'US'),
+                            'city': data.get('city', 'Unknown'),
+                            'state': data.get('regionName', 'Unknown'),
+                            'timezone': data.get('timezone', 'America/New_York'),
+                            'isp': data.get('isp', 'Unknown')
+                        }
+        except Exception:
+            pass
         
-        for service_url in geoip_services:
-            try:
-                response = requests.get(service_url, timeout=5)
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    # Parse based on service
-                    if 'ip-api.com' in service_url:
-                        if data.get('status') == 'success' and data.get('countryCode') == 'US':
-                            return {
-                                **proxy_dict,
-                                'country': 'US',
-                                'city': data.get('city', 'Unknown'),
-                                'state': data.get('regionName', data.get('region', 'Unknown')),
-                                'timezone': data.get('timezone', 'America/New_York'),
-                                'isp': data.get('isp', 'Unknown')
-                            }
-                    
-                    elif 'ipapi.co' in service_url:
-                        if data.get('country_code') == 'US':
-                            return {
-                                **proxy_dict,
-                                'country': 'US',
-                                'city': data.get('city', 'Unknown'),
-                                'state': data.get('region', 'Unknown'),
-                                'timezone': data.get('timezone', 'America/New_York'),
-                                'isp': data.get('org', 'Unknown')
-                            }
-                        
-            except Exception as e:
-                continue
-        
-        # If all services fail, return with defaults
-        print(f"      ⚠️  GeoIP lookup failed for {ip}, using defaults")
-        return {**proxy_dict, **defaults}
-    
-    async def get_proxy(self) -> Optional[Dict]:
-        """Get a working proxy - prioritizes cached working ones"""
-        
-        # Refresh if needed
-        if self._needs_refresh():
-            await self._refresh_proxy_list()
-        
-        # If still no proxies, raise error
-        if not self.working_proxies:
-            raise Exception("No working proxies available! Cannot proceed.")
-        
-        # Try to get from working proxies first
-        available = [p for p in self.working_proxies 
-                    if p['server'] not in self.used_this_session 
-                    and p['server'] not in self.failed_proxies]
-        
-        if not available:
-            # Reset session usage
-            print(f"   🔄 All proxies used this session, resetting...")
-            self.used_this_session.clear()
-            available = [p for p in self.working_proxies 
-                        if p['server'] not in self.failed_proxies]
-        
-        if not available:
-            raise Exception("All cached proxies have failed! Refreshing...")
-        
-        proxy = random.choice(available)
-        self.used_this_session.add(proxy['server'])
-        
-        return proxy
-    
-    def _needs_refresh(self) -> bool:
-        """Check if we need to find new proxies"""
-        if not self.working_proxies:
-            return True
-        if not self.last_refresh:
-            return True
-        if datetime.now() - self.last_refresh > timedelta(hours=24):
-            return True
-        return False
+        return defaults
     
     async def _refresh_proxy_list(self):
-        """Scrape new proxies from free sources and enrich with GeoIP"""
-        print(f"   🔄 Searching for new US proxies with location data...")
+        """Scrape fresh proxies from multiple sources"""
+        print(f"   🔄 Scraping fresh proxies...")
         
-        new_proxies = []
+        async with aiohttp.ClientSession() as session:
+            # Run all scrapers in parallel
+            results = await asyncio.gather(
+                self._scrape_proxyscrape(session),
+                self._scrape_geonode(session),
+                self._scrape_proxylist_download(session),
+                self._scrape_hidemy(session),
+                self._scrape_spys(session),
+                return_exceptions=True
+            )
         
-        # Source 1: US-Proxy.org
-        new_proxies.extend(await self._scrape_us_proxy_org())
+        # Collect all proxies
+        all_proxies = []
+        for result in results:
+            if isinstance(result, list):
+                all_proxies.extend(result)
         
-        # Source 2: Free-Proxy-List
-        new_proxies.extend(await self._scrape_free_proxy_list())
+        # Deduplicate by IP
+        seen_ips = set()
+        unique_proxies = []
+        for p in all_proxies:
+            if p['ip'] not in seen_ips:
+                seen_ips.add(p['ip'])
+                unique_proxies.append(p)
         
-        # Source 3: ProxyScrape
-        new_proxies.extend(await self._scrape_proxyscrape())
+        print(f"   📊 Found {len(unique_proxies)} unique proxies")
         
-        print(f"   📊 Found {len(new_proxies)} potential US proxies")
+        if not unique_proxies:
+            print(f"   ❌ No proxies found from any source!")
+            return
         
-        # Enrich with GeoIP data
-        enriched_count = 0
-        for proxy in new_proxies:
-            if proxy['server'] not in [p['server'] for p in self.working_proxies]:
-                if proxy['server'] not in self.failed_proxies:
-                    # Enrich with GeoIP
-                    enriched = self._enrich_proxy_with_geoip(proxy)
-                    # Only add if it's confirmed US
-                    if enriched['country'] == 'US':
-                        self.working_proxies.append(enriched)
-                        enriched_count += 1
+        # Enrich with GeoIP (batch with rate limiting)
+        print(f"   🌍 Getting location data...")
+        enriched = []
         
-        print(f"   ✅ Added {enriched_count} new verified US proxies with location data")
+        async with aiohttp.ClientSession() as session:
+            # Process in batches of 10 to respect rate limits
+            batch_size = 10
+            for i in range(0, len(unique_proxies), batch_size):
+                batch = unique_proxies[i:i+batch_size]
+                
+                tasks = []
+                for proxy in batch:
+                    tasks.append(self._enrich_proxy(session, proxy))
+                
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                for result in batch_results:
+                    if isinstance(result, dict) and result.get('country') == 'US':
+                        enriched.append(result)
+                
+                # Rate limit: ip-api allows 45 requests/minute
+                if i + batch_size < len(unique_proxies):
+                    await asyncio.sleep(1.5)
         
-        # Limit cache size to 1000 proxies
-        if len(self.working_proxies) > 1000:
-            self.working_proxies = self.working_proxies[-1000:]
+        print(f"   ✅ {len(enriched)} verified US proxies with location data")
         
+        # Merge with existing (keep old ones that aren't failed)
+        existing_servers = {p['server'] for p in enriched}
+        for old_proxy in self.working_proxies:
+            if old_proxy['server'] not in existing_servers:
+                if old_proxy['server'] not in self.failed_proxies:
+                    enriched.append(old_proxy)
+        
+        self.working_proxies = enriched
         self.last_refresh = datetime.now()
         self._save_cache()
         
-        print(f"   💾 Total working proxies in cache: {len(self.working_proxies)}")
+        print(f"   💾 Total proxies in cache: {len(self.working_proxies)}")
     
-    async def _scrape_us_proxy_org(self) -> List[Dict]:
-        """Scrape US-Proxy.org"""
+    async def _enrich_proxy(self, session: aiohttp.ClientSession, proxy: Dict) -> Dict:
+        """Add GeoIP data to proxy"""
+        geo = await self._get_geoip(session, proxy['ip'])
+        return {**proxy, **geo}
+    
+    async def _scrape_proxyscrape(self, session: aiohttp.ClientSession) -> List[Dict]:
+        """ProxyScrape API - usually has lots of proxies"""
+        proxies = []
+        try:
+            urls = [
+                "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=US&ssl=yes&anonymity=all",
+                "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=US&ssl=all&anonymity=elite",
+            ]
+            for url in urls:
+                text = await self._fetch_url(session, url)
+                if text:
+                    for line in text.strip().split('\n'):
+                        if ':' in line:
+                            parts = line.strip().split(':')
+                            if len(parts) == 2:
+                                ip, port = parts[0], parts[1]
+                                if ip and port.isdigit():
+                                    proxies.append({
+                                        'server': f'http://{ip}:{port}',
+                                        'ip': ip
+                                    })
+            print(f"      ✓ proxyscrape: {len(proxies)}")
+        except Exception as e:
+            print(f"      ✗ proxyscrape: {e}")
+        return proxies
+    
+    async def _scrape_geonode(self, session: aiohttp.ClientSession) -> List[Dict]:
+        """Geonode API - good quality proxies"""
+        proxies = []
+        try:
+            url = "https://proxylist.geonode.com/api/proxy-list?limit=200&page=1&sort_by=lastChecked&sort_type=desc&country=US&protocols=http%2Chttps"
+            text = await self._fetch_url(session, url, timeout=15)
+            if text:
+                data = json.loads(text)
+                for p in data.get('data', []):
+                    ip = p.get('ip')
+                    port = p.get('port')
+                    if ip and port:
+                        proxies.append({
+                            'server': f"http://{ip}:{port}",
+                            'ip': ip
+                        })
+            print(f"      ✓ geonode: {len(proxies)}")
+        except Exception as e:
+            print(f"      ✗ geonode: {e}")
+        return proxies
+    
+    async def _scrape_proxylist_download(self, session: aiohttp.ClientSession) -> List[Dict]:
+        """proxy-list.download - text list"""
+        proxies = []
+        try:
+            urls = [
+                "https://www.proxy-list.download/api/v1/get?type=http&country=US",
+                "https://www.proxy-list.download/api/v1/get?type=https&country=US",
+            ]
+            for url in urls:
+                text = await self._fetch_url(session, url)
+                if text:
+                    for line in text.strip().split('\n'):
+                        if ':' in line:
+                            parts = line.strip().split(':')
+                            if len(parts) == 2:
+                                ip, port = parts[0], parts[1]
+                                if ip and port.isdigit():
+                                    proxies.append({
+                                        'server': f'http://{ip}:{port}',
+                                        'ip': ip
+                                    })
+            print(f"      ✓ proxy-list.download: {len(proxies)}")
+        except Exception as e:
+            print(f"      ✗ proxy-list.download: {e}")
+        return proxies
+    
+    async def _scrape_hidemy(self, session: aiohttp.ClientSession) -> List[Dict]:
+        """hidemy.name - requires parsing"""
         proxies = []
         try:
             from bs4 import BeautifulSoup
-            response = requests.get("https://www.us-proxy.org/", timeout=10)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                table = soup.find('table', {'class': 'table'})
-                if table:
-                    for row in table.find_all('tr')[1:100]:
-                        cols = row.find_all('td')
-                        if len(cols) >= 7:
-                            ip = cols[0].text.strip()
-                            port = cols[1].text.strip()
-                            https = cols[6].text.strip()
-                            if https == 'yes':
-                                proxies.append({
-                                    'server': f'http://{ip}:{port}',
-                                    'ip': ip,
-                                    'country': 'US'
-                                })
-            print(f"      ✓ us-proxy.org: {len(proxies)} proxies")
+            url = "https://hidemy.name/en/proxy-list/?country=US&type=hs#list"
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 200:
+                    html = await resp.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    table = soup.find('table')
+                    if table:
+                        for row in table.find_all('tr')[1:]:
+                            cols = row.find_all('td')
+                            if len(cols) >= 2:
+                                ip = cols[0].text.strip()
+                                port = cols[1].text.strip()
+                                if ip and port.isdigit():
+                                    proxies.append({
+                                        'server': f'http://{ip}:{port}',
+                                        'ip': ip
+                                    })
+            print(f"      ✓ hidemy: {len(proxies)}")
         except Exception as e:
-            print(f"      ✗ us-proxy.org failed: {e}")
+            print(f"      ✗ hidemy: {e}")
         return proxies
     
-    async def _scrape_free_proxy_list(self) -> List[Dict]:
-        """Scrape Free-Proxy-List.net"""
+    async def _scrape_spys(self, session: aiohttp.ClientSession) -> List[Dict]:
+        """spys.one - lots of proxies"""
         proxies = []
         try:
-            from bs4 import BeautifulSoup
-            response = requests.get("https://free-proxy-list.net/", timeout=10)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                table = soup.find('table', {'class': 'table'})
-                if table:
-                    for row in table.find_all('tr')[1:100]:
-                        cols = row.find_all('td')
-                        if len(cols) >= 7:
-                            ip = cols[0].text.strip()
-                            port = cols[1].text.strip()
-                            country = cols[3].text.strip()
-                            https = cols[6].text.strip()
-                            if country == 'US' and https == 'yes':
-                                proxies.append({
-                                    'server': f'http://{ip}:{port}',
-                                    'ip': ip,
-                                    'country': 'US'
-                                })
-            print(f"      ✓ free-proxy-list: {len(proxies)} proxies")
-        except Exception as e:
-            print(f"      ✗ free-proxy-list failed: {e}")
-        return proxies
-    
-    async def _scrape_proxyscrape(self) -> List[Dict]:
-        """Scrape ProxyScrape API"""
-        proxies = []
-        try:
-            url = "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=US&ssl=yes&anonymity=all"
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                for line in response.text.strip().split('\n')[:100]:
-                    if ':' in line:
-                        parts = line.strip().split(':')
+            url = "https://spys.me/proxy.txt"
+            text = await self._fetch_url(session, url)
+            if text:
+                for line in text.strip().split('\n'):
+                    if ':' in line and 'US-' in line:
+                        parts = line.split(' ')[0].split(':')
                         if len(parts) == 2:
-                            ip, port = parts
-                            proxies.append({
-                                'server': f'http://{ip}:{port}',
-                                'ip': ip,
-                                'country': 'US'
-                            })
-            print(f"      ✓ proxyscrape: {len(proxies)} proxies")
+                            ip, port = parts[0], parts[1]
+                            if ip and port.isdigit():
+                                proxies.append({
+                                    'server': f'http://{ip}:{port}',
+                                    'ip': ip
+                                })
+            print(f"      ✓ spys.me: {len(proxies)}")
         except Exception as e:
-            print(f"      ✗ proxyscrape failed: {e}")
+            print(f"      ✗ spys.me: {e}")
         return proxies
     
     def mark_proxy_failed(self, proxy_server: str):
-        """Mark proxy as permanently failed"""
-        self.failed_proxies.add(proxy_server)
+        """Mark proxy as failed (will be retried after cooldown)"""
+        self.failed_proxies[proxy_server] = datetime.now()
+        # Remove from working list
         self.working_proxies = [p for p in self.working_proxies if p['server'] != proxy_server]
         self._save_cache()
     
     def mark_proxy_success(self, proxy_server: str):
-        """Mark proxy as working (already in list, just save cache)"""
-        self._save_cache()
+        """Mark proxy as successful"""
+        # Remove from failed if it was there
+        if proxy_server in self.failed_proxies:
+            del self.failed_proxies[proxy_server]

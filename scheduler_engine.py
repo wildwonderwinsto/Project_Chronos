@@ -255,7 +255,7 @@ class ChronoScheduler:
         self.consecutive_failures = 0  # Reset counter
     
     async def _run_attempt(self):
-        """Execute a single attempt"""
+        """Execute a single attempt with automatic retry on ALREADY_ENTERED"""
         
         print(f"\n{'='*70}")
         print(f"🎬 ATTEMPT #{self.total_attempts + 1}")
@@ -263,10 +263,12 @@ class ChronoScheduler:
         
         engine = BrowserEngine(
             manual_captcha=self.manual_captcha,
-            test_mode=False
+            test_mode=False,
+            max_retries=3
         )
         
-        success, log_id = await engine.run_single_attempt()
+        # Use run_with_retry to automatically handle ALREADY_ENTERED errors
+        success, log_id = await engine.run_with_retry()
         
         # Update statistics
         self.total_attempts += 1
@@ -347,18 +349,45 @@ async def run_production():
 
 if __name__ == "__main__":
     import sys
+    import signal
+    
+    # Graceful shutdown handler
+    def signal_handler(sig, frame):
+        print("\n\n" + "="*70)
+        print("⛔ SHUTDOWN SIGNAL RECEIVED")
+        print("="*70)
+        print("   Stopping scheduler gracefully...")
+        print("   Please wait for current operation to complete...")
+        print("="*70 + "\n")
+        sys.exit(0)
+    
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # Docker/system stop
     
     if len(sys.argv) > 1 and sys.argv[1] == "test":
-        asyncio.run(test_scheduler())
+        print("\n" + "="*70)
+        print("🧪 STARTING TEST MODE")
+        print("="*70)
+        print("   Press Ctrl+C to stop at any time")
+        print("="*70 + "\n")
+        
+        try:
+            asyncio.run(test_scheduler())
+        except (KeyboardInterrupt, SystemExit):
+            print("\n✅ Test stopped cleanly\n")
     else:
-        print("\n⚠️  Starting in PRODUCTION mode - will run until Dec 31, 2025")
-        print("   Use 'python scheduler_engine.py test' to run test mode")
-        print("   Press Ctrl+C to stop\n")
+        print("\n" + "="*70)
+        print("🚀 STARTING PRODUCTION MODE")
+        print("="*70)
+        print("   Running until: December 31, 2025 11:59 PM EST")
+        print("   Press Ctrl+C to stop at any time")
+        print("   Use 'python scheduler_engine.py test' for test mode")
+        print("="*70 + "\n")
         
         try:
             asyncio.run(run_production())
-        except KeyboardInterrupt:
-            print("\n\n⛔ Scheduler stopped by user\n")
-
+        except (KeyboardInterrupt, SystemExit):
+            print("\n✅ Scheduler stopped cleanly\n")
 #python scheduler_engine.py test
 #source .venv/bin/activate

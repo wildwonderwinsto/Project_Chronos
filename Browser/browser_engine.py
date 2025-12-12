@@ -34,11 +34,12 @@ SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 class BrowserEngine:
     """Core browser automation engine with strict context isolation"""
     
-    def __init__(self, manual_captcha=False, test_mode=False):
+    def __init__(self, manual_captcha=False, test_mode=False, max_retries=3):
         self.supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
         self.persona_generator = PersonaGenerator()
         self.manual_captcha = manual_captcha
         self.test_mode = test_mode
+        self.max_retries = max_retries
         
         # Initialize helper components
         self.db_logger = DatabaseLogger(self.supabase)
@@ -47,6 +48,9 @@ class BrowserEngine:
         self.captcha_solver = CaptchaSolver(manual_captcha)
         self.social_handler = SocialActionsHandler()
         self.verifier = SubmissionVerifier()
+        
+        # Track used emails to avoid duplicates within session
+        self.used_emails = set()
         
         # Create directories
         Path("screenshots").mkdir(exist_ok=True)
@@ -134,15 +138,50 @@ class BrowserEngine:
                 # Small delay to avoid hammering
                 await asyncio.sleep(0.5)
 
+    async def run_with_retry(self):
+        """Execute form submission with automatic retry on ALREADY_ENTERED errors"""
+        for attempt in range(self.max_retries):
+            if attempt > 0:
+                print(f"\n   🔄 Retry attempt {attempt + 1}/{self.max_retries} (generating new persona)...")
+            
+            success, log_id, reason = await self._run_single_attempt_internal()
+            
+            if success:
+                return True, log_id
+            
+            # Only retry on ALREADY_ENTERED
+            if reason != "ALREADY_ENTERED":
+                return False, log_id
+            
+            print(f"   ⚠️  Email already used, will retry with new persona...")
+            await asyncio.sleep(1)
+        
+        print(f"   ❌ All {self.max_retries} retry attempts failed")
+        return False, log_id
+
     async def run_single_attempt(self):
-        """Execute ONE complete form submission attempt"""
+        """Execute ONE complete form submission attempt (wrapper for backwards compatibility)"""
+        success, log_id, _ = await self._run_single_attempt_internal()
+        return success, log_id
+
+    async def _run_single_attempt_internal(self):
+        """Execute ONE complete form submission attempt, returns (success, log_id, reason)"""
         
         # Import managers
         from Browser.proxy_manager import ProxyManager
         from Browser.fingerprint_manager import FingerprintManager
         
-        # Step 1: Generate persona
+        # Step 1: Generate persona (ensure unique email)
         persona = self.persona_generator.generate()
+        
+        # Keep generating until we get a unique email
+        max_email_attempts = 10
+        for _ in range(max_email_attempts):
+            if persona['email'] not in self.used_emails:
+                break
+            persona = self.persona_generator.generate()
+        
+        self.used_emails.add(persona['email'])
         full_name = f"{persona['first']} {persona['last']}"
         
         self._print_header(full_name, persona['email'])
@@ -157,7 +196,7 @@ class BrowserEngine:
             proxy = await self._get_working_proxy(proxy_mgr)
         except Exception as e:
             print(f"   ❌ CRITICAL: Could not find any working proxy: {e}")
-            return False, None
+            return False, None, "PROXY_FAILED"
         
         # Display proxy info nicely
         city = proxy.get('city', 'Unknown')
@@ -177,7 +216,7 @@ class BrowserEngine:
         if not self.test_mode:
             log_id = await self.db_logger.create_log(full_name, persona['email'])
             if not log_id:
-                return False, None
+                return False, None, "DB_LOG_FAILED"
             
             # Log proxy info
             await self._log_proxy_info(log_id, proxy)
@@ -334,7 +373,7 @@ class BrowserEngine:
                         await self.db_logger.log_failure(log_id, "CAPTCHA_FAILED", screenshot)
                     await context.close()
                     await browser.close()
-                    return False, log_id
+                    return False, log_id, "CAPTCHA_FAILED"
                 
                 # Handle social actions
                 print(f"   🎯 Completing social actions...")
@@ -355,11 +394,12 @@ class BrowserEngine:
                             await self.db_logger.log_failure(log_id, "CAPTCHA_RESET_FAILED", screenshot)
                         await context.close()
                         await browser.close()
-                        return False, log_id
+                        return False, log_id, "CAPTCHA_RESET_FAILED"
                 
                 # TEST MODE: Stop before submission
                 if self.test_mode:
-                    return await self._handle_test_mode(context, browser, log_id)
+                    success, log_id = await self._handle_test_mode(context, browser, log_id)
+                    return success, log_id, "TEST_MODE"
                 
                 # PRODUCTION MODE: Submit
                 print(f"   📤 Submitting form...")
@@ -378,11 +418,12 @@ class BrowserEngine:
                 await browser.close()
                 
                 print(f"{'='*70}\n")
-                return success, log_id
+                return success, log_id, reason
                 
         except Exception as e:
             print(f"   ❌ CRITICAL ERROR: {str(e)}")
-            return await self._handle_exception(page if 'page' in locals() else None, log_id, e)
+            success, log_id = await self._handle_exception(page if 'page' in locals() else None, log_id, e)
+            return success, log_id, f"EXCEPTION: {str(e)}"
 
     async def _log_proxy_info(self, log_id: str, proxy: dict):
         """Log proxy information to database"""
