@@ -171,6 +171,16 @@ class ProxyManager:
             print(f"   ❌ No proxies found from any source!")
             return
         
+        # Limit to reasonable number (rate limits on GeoIP APIs)
+        MAX_PROXIES = 10
+        if len(unique_proxies) > MAX_PROXIES:
+            print(f"   ⚠️  Limiting to {MAX_PROXIES} proxies (too many for GeoIP lookup)")
+            unique_proxies = unique_proxies[:MAX_PROXIES]
+        
+        # Enrich with GeoIP (batch with rate limiting)
+        print(f"   🌍 Getting location data for {len(unique_proxies)} proxies...")
+        enriched = []
+        
         # Enrich with GeoIP (batch with rate limiting)
         print(f"   🌍 Getting location data...")
         enriched = []
