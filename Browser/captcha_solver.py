@@ -2,238 +2,370 @@ import asyncio
 import io
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 from playwright.async_api import Page
 import pytesseract
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+import numpy as np
 from config import FORM_SELECTORS
 
 
 class CaptchaSolver:
-    """Simple CAPTCHA solver - ONE strategy that works for YCEQ style CAPTCHAs"""
+    """CAPTCHA solver with dot removal, letter segmentation, and retry logic"""
     
-    def __init__(self, manual_mode: bool = False):
+    def __init__(self, manual_mode: bool = False, max_retries: int = 3):
         self.manual_mode = manual_mode
+        self.max_retries = max_retries
         Path("captcha_images").mkdir(exist_ok=True)
     
     async def solve(self, page: Page, log_id: str) -> bool:
-        """Solve the CAPTCHA"""
+        """Solve the CAPTCHA with retry logic"""
         try:
             await page.wait_for_selector('.captcha', timeout=5000)
             
             if self.manual_mode:
                 return await self._solve_manually(page)
             
-            # Get CAPTCHA text
-            captcha_text = await self._ocr_captcha(page, log_id)
+            for attempt in range(self.max_retries):
+                attempt_id = f"{log_id}_attempt{attempt}"
+                print(f"   🔄 CAPTCHA attempt {attempt + 1}/{self.max_retries}")
+                
+                captcha_text = await self._ocr_captcha(page, attempt_id)
+                
+                if captcha_text and len(captcha_text) == 4:
+                    print(f"   ✅ CAPTCHA read: '{captcha_text}'")
+                    
+                    await page.fill(FORM_SELECTORS['captcha'], '')
+                    await asyncio.sleep(0.2)
+                    await page.fill(FORM_SELECTORS['captcha'], captcha_text)
+                    await asyncio.sleep(0.3)
+                    
+                    filled = await page.input_value(FORM_SELECTORS['captcha'])
+                    if filled == captcha_text:
+                        print(f"   ✅ CAPTCHA filled successfully")
+                        return True
+                else:
+                    print(f"   ❌ OCR failed or result invalid: '{captcha_text}'")
+                
+                if attempt < self.max_retries - 1:
+                    print(f"   🔄 Refreshing CAPTCHA...")
+                    await self._refresh_captcha(page)
+                    await asyncio.sleep(0.5)
             
-            if not captcha_text or len(captcha_text) < 4:
-                print(f"   ❌ OCR failed or result too short: '{captcha_text}'")
-                return False
-            
-            print(f"   ✅ CAPTCHA read: '{captcha_text}'")
-            
-            # Fill it in
-            await page.fill(FORM_SELECTORS['captcha'], '')
-            await asyncio.sleep(0.2)
-            await page.fill(FORM_SELECTORS['captcha'], captcha_text)
-            await asyncio.sleep(0.3)
-            
-            # Verify
-            filled = await page.input_value(FORM_SELECTORS['captcha'])
-            if filled == captcha_text:
-                print(f"   ✅ CAPTCHA filled successfully")
-                return True
-            
-            print(f"   ❌ Fill verification failed")
+            print(f"   ❌ All CAPTCHA attempts failed")
             return False
                 
         except Exception as e:
             print(f"   ❌ CAPTCHA error: {e}")
             return False
     
-    def _apply_adaptive_threshold(self, image: Image.Image) -> Image.Image:
-        """Apply adaptive thresholding using local pixel analysis"""
-        import numpy as np
+    async def _refresh_captcha(self, page: Page) -> None:
+        """Refresh the CAPTCHA image"""
+        try:
+            captcha_img = await page.query_selector('.captcha')
+            if captcha_img:
+                await captcha_img.click()
+                await asyncio.sleep(0.3)
+        except Exception:
+            pass
+    
+    def _remove_dots_simple(self, image: Image.Image) -> Image.Image:
+        """Remove small dot noise using morphological operations"""
         img_array = np.array(image)
         
-        # Calculate local threshold using block mean
-        block_size = 15
-        h, w = img_array.shape
-        output = np.zeros_like(img_array)
+        kernel_size = 2
         
-        for i in range(h):
-            for j in range(w):
-                # Define local region
-                y1 = max(0, i - block_size // 2)
-                y2 = min(h, i + block_size // 2 + 1)
-                x1 = max(0, j - block_size // 2)
-                x2 = min(w, j + block_size // 2 + 1)
-                
-                local_mean = np.mean(img_array[y1:y2, x1:x2])
-                # Threshold with offset for better text detection
-                threshold = local_mean - 10
-                output[i, j] = 255 if img_array[i, j] > threshold else 0
+        # Erode - removes small isolated pixels (dots)
+        eroded = img_array.copy()
+        for _ in range(kernel_size):
+            temp = np.pad(eroded, 1, mode='constant', constant_values=255)
+            eroded = np.minimum.reduce([
+                temp[:-2, 1:-1], temp[2:, 1:-1],
+                temp[1:-1, :-2], temp[1:-1, 2:],
+                temp[1:-1, 1:-1]
+            ])
         
-        return Image.fromarray(output)
+        # Dilate - restore letter thickness
+        dilated = eroded.copy()
+        for _ in range(kernel_size + 1):
+            temp = np.pad(dilated, 1, mode='constant', constant_values=255)
+            dilated = np.maximum.reduce([
+                temp[:-2, 1:-1], temp[2:, 1:-1],
+                temp[1:-1, :-2], temp[1:-1, 2:],
+                temp[1:-1, 1:-1]
+            ])
+        
+        return Image.fromarray(dilated.astype(np.uint8))
     
-    def _fix_common_confusions(self, text: str) -> str:
-        """Fix common OCR character confusions for uppercase letters"""
-        # Common misreads in CAPTCHA OCR
+    def _segment_letters(self, image: Image.Image) -> List[Image.Image]:
+        """Segment image by finding actual letter boundaries using vertical projection"""
+        img_array = np.array(image)
+        height, width = img_array.shape
+        
+        # Calculate vertical projection (count black pixels per column)
+        # Black pixels are 0, white are 255
+        projection = np.sum(img_array < 128, axis=0)
+        
+        # Find letter regions (columns with black pixels)
+        threshold = height * 0.05  # At least 5% of column height must be black
+        in_letter = projection > threshold
+        
+        # Find transitions (start/end of letters)
+        boundaries = []
+        start = None
+        
+        for i in range(width):
+            if in_letter[i] and start is None:
+                start = i
+            elif not in_letter[i] and start is not None:
+                boundaries.append((start, i))
+                start = None
+        
+        # Handle case where last letter extends to edge
+        if start is not None:
+            boundaries.append((start, width))
+        
+        # If we found exactly 4 letter regions, use them
+        if len(boundaries) == 4:
+            letters = []
+            padding = 5
+            for start, end in boundaries:
+                left = max(0, start - padding)
+                right = min(width, end + padding)
+                letter_img = image.crop((left, 0, right, height))
+                letters.append(letter_img)
+            return letters
+        
+        # If letters are touching/merged, try to split merged regions
+        if len(boundaries) < 4 and len(boundaries) > 0:
+            letters = []
+            padding = 5
+            
+            for start, end in boundaries:
+                region_width = end - start
+                # Estimate how many letters in this region
+                avg_letter_width = width / 4
+                num_letters = max(1, round(region_width / avg_letter_width))
+                
+                if num_letters == 1:
+                    left = max(0, start - padding)
+                    right = min(width, end + padding)
+                    letters.append(image.crop((left, 0, right, height)))
+                else:
+                    # Split this region into estimated number of letters
+                    sub_width = region_width / num_letters
+                    for j in range(num_letters):
+                        sub_start = int(start + j * sub_width)
+                        sub_end = int(start + (j + 1) * sub_width)
+                        left = max(0, sub_start - padding)
+                        right = min(width, sub_end + padding)
+                        letters.append(image.crop((left, 0, right, height)))
+            
+            # If we got 4 letters, return them
+            if len(letters) == 4:
+                return letters
+        
+        # Fallback: equal split if detection failed
+        letters = []
+        letter_width = width // 4
+        padding = 10
+        
+        for i in range(4):
+            start = max(0, i * letter_width - padding)
+            end = min(width, (i + 1) * letter_width + padding)
+            letters.append(image.crop((start, 0, end, height)))
+        
+        return letters
+    
+    def _deskew_letter(self, image: Image.Image) -> Image.Image:
+        """Straighten a rotated letter"""
+        img_array = np.array(image)
+        coords = np.column_stack(np.where(img_array < 128))
+        
+        if len(coords) < 10:
+            return image
+        
+        try:
+            center = coords.mean(axis=0)
+            centered = coords - center
+            cov = np.cov(centered.T)
+            
+            if cov.shape == (2, 2):
+                eigenvalues, eigenvectors = np.linalg.eig(cov)
+                angle = np.degrees(np.arctan2(eigenvectors[0, 1], eigenvectors[0, 0]))
+                
+                if abs(angle) < 30 and abs(angle) > 2:
+                    return image.rotate(-angle, fillcolor=255, expand=False)
+        except Exception:
+            pass
+        
+        return image
+    
+    def _ocr_single_letter(self, image: Image.Image) -> str:
+        """OCR a single letter"""
+        LETTERS_ONLY = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        
+        padded = ImageOps.expand(image, border=20, fill=255)
+        
+        for psm in [10, 8, 13]:
+            try:
+                text = pytesseract.image_to_string(
+                    padded,
+                    config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist={LETTERS_ONLY}'
+                ).strip()
+                
+                cleaned = re.sub(r'[^A-Z]', '', text.upper())
+                if cleaned:
+                    return self._fix_confusions(cleaned[0])
+            except Exception:
+                pass
+        
+        return ''
+    
+    def _fix_confusions(self, char: str) -> str:
+        """Fix common character confusions"""
         fixes = {
             '0': 'O', '1': 'I', '5': 'S', '8': 'B',
             '6': 'G', '2': 'Z', '4': 'A', '7': 'T',
         }
-        result = ''
-        for char in text.upper():
-            result += fixes.get(char, char)
-        return result
+        return fixes.get(char, char)
 
     async def _ocr_captcha(self, page: Page, log_id: str) -> Optional[str]:
-        """
-        Read CAPTCHA optimized for 4-letter uppercase CAPTCHAs
-        """
+        """OCR the CAPTCHA using multiple methods"""
         try:
-            # Get CAPTCHA image
             captcha_img = await page.query_selector('.captcha')
             if not captcha_img:
                 return None
             
-            # Screenshot it
             screenshot_bytes = await captcha_img.screenshot()
             
-            # Save original
-            original_path = f"captcha_images/{log_id}_original.png"
-            with open(original_path, 'wb') as f:
+            with open(f"captcha_images/{log_id}_original.png", 'wb') as f:
                 f.write(screenshot_bytes)
             
-            # Open with PIL
             image = Image.open(io.BytesIO(screenshot_bytes))
             
-            # === IMPROVED PREPROCESSING FOR 4-LETTER CAPTCHA ===
-            
-            # 1. Upscale 4x for better detail preservation
+            # === PREPROCESSING ===
             width, height = image.size
             image = image.resize((width * 4, height * 4), Image.LANCZOS)
-            
-            # 2. Convert to grayscale
             image = image.convert('L')
             
-            # 3. Sharpen BEFORE noise removal to preserve edges
-            image = image.filter(ImageFilter.SHARPEN)
-            image = image.filter(ImageFilter.SHARPEN)
-            
-            # 4. Light noise removal
-            image = image.filter(ImageFilter.MedianFilter(size=3))
-            
-            # 5. Moderate contrast enhancement
+            # Increase contrast
             enhancer = ImageEnhance.Contrast(image)
-            image = enhancer.enhance(1.8)
+            image = enhancer.enhance(2.0)
             
-            # 6. Brightness adjustment
-            brightness = ImageEnhance.Brightness(image)
-            image = brightness.enhance(1.1)
+            # Binary threshold
+            threshold = 160
+            image = image.point(lambda p: 0 if p < threshold else 255)
             
-            # 7. Apply adaptive thresholding
-            image = self._apply_adaptive_threshold(image)
+            # Remove dots
+            image = self._remove_dots_simple(image)
             
-            # 8. Morphological cleanup - erode then dilate to remove noise
-            image = image.filter(ImageFilter.MinFilter(size=3))
-            image = image.filter(ImageFilter.MaxFilter(size=3))
-            
-            # 9. Final cleanup
+            # Cleanup
             image = image.filter(ImageFilter.MedianFilter(size=3))
             
-            # 10. Ensure black text on white background
+            # Ensure black text on white background
             pixels = list(image.getdata())
             if sum(pixels) / len(pixels) < 128:
-                image = Image.eval(image, lambda x: 255 - x)
+                image = ImageOps.invert(image)
             
-            # Save preprocessed
-            processed_path = f"captcha_images/{log_id}_processed.png"
-            image.save(processed_path)
+            image.save(f"captcha_images/{log_id}_processed.png")
             
-            # === OCR - EXACTLY 4 UPPERCASE LETTERS ===
-            LETTERS_ONLY = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+            # === METHOD 1: Letter segmentation ===
+            result_segmented = self._try_segmented_ocr(image, log_id)
+            if result_segmented and len(result_segmented) == 4:
+                print(f"   📝 Segmented: {result_segmented}")
+                return result_segmented
             
-            best_result = None
-            best_confidence = 0
+            # === METHOD 2: Full image OCR ===
+            result_full = self._try_full_ocr(image)
+            if result_full and len(result_full) == 4:
+                print(f"   📝 Full OCR: {result_full}")
+                return result_full
             
-            # Try multiple PSM modes with different configs
-            configs = [
-                (7, '--oem 3'),   # Single text line
-                (8, '--oem 3'),   # Single word
-                (13, '--oem 3'),  # Raw line
-                (6, '--oem 3'),   # Uniform block
-                (7, '--oem 1'),   # LSTM only
-                (8, '--oem 1'),
-            ]
+            # === METHOD 3: Alternate preprocessing ===
+            result_alt = self._try_alternate_preprocessing(screenshot_bytes, log_id)
+            if result_alt and len(result_alt) == 4:
+                print(f"   📝 Alternate: {result_alt}")
+                return result_alt
             
-            for psm, oem_config in configs:
-                try:
-                    # Get text with confidence data
-                    data = pytesseract.image_to_data(
-                        image,
-                        config=f'--psm {psm} {oem_config} -c tessedit_char_whitelist={LETTERS_ONLY}',
-                        output_type=pytesseract.Output.DICT
-                    )
-                    
-                    # Extract text and confidence
-                    texts = [t for t in data['text'] if t.strip()]
-                    confs = [c for c, t in zip(data['conf'], data['text']) if t.strip() and c != -1]
-                    
-                    if texts:
-                        raw_text = ''.join(texts)
-                        cleaned = re.sub(r'[^A-Z0-9]', '', raw_text.upper()).strip()
-                        cleaned = self._fix_common_confusions(cleaned)
-                        avg_conf = sum(confs) / len(confs) if confs else 0
-                        
-                        # Perfect match - exactly 4 letters with good confidence
-                        if len(cleaned) == 4 and avg_conf > 60:
-                            return cleaned
-                        
-                        # Track best result
-                        if len(cleaned) >= 3 and (avg_conf > best_confidence or 
-                            (abs(len(cleaned) - 4) < abs(len(best_result or '') - 4))):
-                            best_result = cleaned
-                            best_confidence = avg_conf
-                        
-                except Exception:
-                    pass
-            
-            # Fallback: simple string extraction
-            for psm in [7, 8, 13]:
-                try:
-                    text = pytesseract.image_to_string(
-                        image,
-                        config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist={LETTERS_ONLY}0123456789'
-                    )
-                    cleaned = re.sub(r'[^A-Z0-9]', '', text.upper()).strip()
-                    cleaned = self._fix_common_confusions(cleaned)
-                    
-                    if len(cleaned) == 4:
-                        return cleaned
-                    
-                    if cleaned and (best_result is None or abs(len(cleaned) - 4) < abs(len(best_result) - 4)):
-                        best_result = cleaned
-                except Exception:
-                    pass
-            
-            # Return best result, adjusted to 4 chars
-            if best_result:
-                if len(best_result) > 4:
-                    return best_result[:4]
-                elif len(best_result) == 3:
-                    print(f"   ⚠️  Only got 3 letters: {best_result}")
-                    return best_result
-                elif len(best_result) == 4:
-                    return best_result
+            # Return best partial result
+            for result in [result_segmented, result_full, result_alt]:
+                if result and len(result) >= 3:
+                    return result
             
             return None
             
         except Exception as e:
             print(f"   ❌ OCR error: {e}")
             return None
+    
+    def _try_segmented_ocr(self, image: Image.Image, log_id: str) -> Optional[str]:
+        """OCR by segmenting into individual letters"""
+        try:
+            letters = self._segment_letters(image)
+            result = ''
+            
+            for i, letter_img in enumerate(letters):
+                letter_img = self._deskew_letter(letter_img)
+                letter_img.save(f"captcha_images/{log_id}_letter{i}.png")
+                
+                char = self._ocr_single_letter(letter_img)
+                if char:
+                    result += char
+            
+            return result if result else None
+        except Exception:
+            return None
+    
+    def _try_full_ocr(self, image: Image.Image) -> Optional[str]:
+        """OCR on the full image"""
+        LETTERS_ONLY = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        best_result = None
+        
+        for psm in [7, 8, 13, 6]:
+            try:
+                text = pytesseract.image_to_string(
+                    image,
+                    config=f'--psm {psm} --oem 3 -c tessedit_char_whitelist={LETTERS_ONLY}'
+                )
+                cleaned = re.sub(r'[^A-Z]', '', text.upper()).strip()
+                
+                if len(cleaned) == 4:
+                    return cleaned
+                
+                if cleaned and (best_result is None or len(cleaned) > len(best_result)):
+                    best_result = cleaned
+                    
+            except Exception:
+                pass
+        
+        return best_result[:4] if best_result and len(best_result) > 4 else best_result
+    
+    def _try_alternate_preprocessing(self, screenshot_bytes: bytes, log_id: str) -> Optional[str]:
+        """Try different preprocessing"""
+        image = Image.open(io.BytesIO(screenshot_bytes))
+        
+        width, height = image.size
+        image = image.resize((width * 3, height * 3), Image.LANCZOS)
+        image = image.convert('L')
+        
+        # Sharpen to enhance edges
+        image = image.filter(ImageFilter.SHARPEN)
+        image = image.filter(ImageFilter.SHARPEN)
+        
+        # Different threshold
+        image = image.point(lambda p: 0 if p < 140 else 255)
+        
+        # Stronger median filter
+        image = image.filter(ImageFilter.MedianFilter(size=5))
+        
+        pixels = list(image.getdata())
+        if sum(pixels) / len(pixels) < 128:
+            image = ImageOps.invert(image)
+        
+        image.save(f"captcha_images/{log_id}_alt_processed.png")
+        
+        return self._try_full_ocr(image)
 
     async def _solve_manually(self, page: Page) -> bool:
         """Manual CAPTCHA solving"""
@@ -246,7 +378,7 @@ class CaptchaSolver:
                 if value and len(value) > 0:
                     print(f"   ✅ CAPTCHA entered: {value}")
                     return True
-            except:
+            except Exception:
                 pass
         
         return False

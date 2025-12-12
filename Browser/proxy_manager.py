@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class ProxyManager:
-    """Proxy manager that caches working proxies and reuses them"""
+    """Enhanced proxy manager with GeoIP lookup and better error handling"""
     
     def __init__(self):
         self.working_proxies: List[Dict] = []
@@ -27,20 +27,95 @@ class ProxyManager:
                 with open(self.cache_file, 'r') as f:
                     data = json.load(f)
                     self.working_proxies = data.get('proxies', [])
+                    # Ensure all proxies have required fields
+                    self.working_proxies = [p for p in self.working_proxies if self._validate_proxy_dict(p)]
                     print(f"   ✅ Loaded {len(self.working_proxies)} cached working proxies")
-            except:
-                pass
+            except Exception as e:
+                print(f"   ⚠️  Failed to load cache: {e}")
+                self.working_proxies = []
+    
+    def _validate_proxy_dict(self, proxy: Dict) -> bool:
+        """Ensure proxy dict has all required fields"""
+        required = ['server', 'ip', 'country', 'city', 'state', 'timezone']
+        return all(key in proxy for key in required)
     
     def _save_cache(self):
-        """Save working proxies to cache"""
+        """Save working proxies to cache with nice formatting"""
         try:
+            # Sort proxies by state, then city for easier reading
+            sorted_proxies = sorted(
+                self.working_proxies,
+                key=lambda p: (p.get('state', 'ZZZ'), p.get('city', 'ZZZ'))
+            )
+            
             with open(self.cache_file, 'w') as f:
                 json.dump({
-                    'proxies': self.working_proxies,
-                    'last_updated': datetime.now().isoformat()
-                }, f)
-        except:
-            pass
+                    'last_updated': datetime.now().isoformat(),
+                    'total_proxies': len(sorted_proxies),
+                    'proxies': sorted_proxies
+                }, f, indent=2, sort_keys=False)
+            
+            print(f"   💾 Saved {len(sorted_proxies)} proxies to cache")
+        except Exception as e:
+            print(f"   ⚠️  Failed to save cache: {e}")
+    
+    def _enrich_proxy_with_geoip(self, proxy_dict: Dict) -> Dict:
+        """
+        Enrich proxy with geographic data using free GeoIP API
+        Falls back to defaults if API fails
+        """
+        ip = proxy_dict.get('ip')
+        
+        # Default values
+        defaults = {
+            'country': 'US',
+            'city': 'Unknown',
+            'state': 'Unknown',
+            'timezone': 'America/New_York',
+            'isp': 'Unknown'
+        }
+        
+        # Try multiple free GeoIP services
+        geoip_services = [
+            f"http://ip-api.com/json/{ip}?fields=status,country,countryCode,region,regionName,city,timezone,isp",
+            f"https://ipapi.co/{ip}/json/",
+        ]
+        
+        for service_url in geoip_services:
+            try:
+                response = requests.get(service_url, timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Parse based on service
+                    if 'ip-api.com' in service_url:
+                        if data.get('status') == 'success' and data.get('countryCode') == 'US':
+                            return {
+                                **proxy_dict,
+                                'country': 'US',
+                                'city': data.get('city', 'Unknown'),
+                                'state': data.get('regionName', data.get('region', 'Unknown')),
+                                'timezone': data.get('timezone', 'America/New_York'),
+                                'isp': data.get('isp', 'Unknown')
+                            }
+                    
+                    elif 'ipapi.co' in service_url:
+                        if data.get('country_code') == 'US':
+                            return {
+                                **proxy_dict,
+                                'country': 'US',
+                                'city': data.get('city', 'Unknown'),
+                                'state': data.get('region', 'Unknown'),
+                                'timezone': data.get('timezone', 'America/New_York'),
+                                'isp': data.get('org', 'Unknown')
+                            }
+                        
+            except Exception as e:
+                continue
+        
+        # If all services fail, return with defaults
+        print(f"      ⚠️  GeoIP lookup failed for {ip}, using defaults")
+        return {**proxy_dict, **defaults}
     
     async def get_proxy(self) -> Optional[Dict]:
         """Get a working proxy - prioritizes cached working ones"""
@@ -49,6 +124,10 @@ class ProxyManager:
         if self._needs_refresh():
             await self._refresh_proxy_list()
         
+        # If still no proxies, raise error
+        if not self.working_proxies:
+            raise Exception("No working proxies available! Cannot proceed.")
+        
         # Try to get from working proxies first
         available = [p for p in self.working_proxies 
                     if p['server'] not in self.used_this_session 
@@ -56,22 +135,21 @@ class ProxyManager:
         
         if not available:
             # Reset session usage
+            print(f"   🔄 All proxies used this session, resetting...")
             self.used_this_session.clear()
             available = [p for p in self.working_proxies 
                         if p['server'] not in self.failed_proxies]
         
         if not available:
-            raise Exception("No working proxies available!")
+            raise Exception("All cached proxies have failed! Refreshing...")
         
         proxy = random.choice(available)
         self.used_this_session.add(proxy['server'])
         
-        print(f"   🌐 Using proxy: {proxy['ip']} (US)")
         return proxy
     
     def _needs_refresh(self) -> bool:
         """Check if we need to find new proxies"""
-        # Only refresh if cache is empty or very old
         if not self.working_proxies:
             return True
         if not self.last_refresh:
@@ -81,8 +159,8 @@ class ProxyManager:
         return False
     
     async def _refresh_proxy_list(self):
-        """Scrape new proxies from free sources"""
-        print(f"   🔄 Searching for new working proxies...")
+        """Scrape new proxies from free sources and enrich with GeoIP"""
+        print(f"   🔄 Searching for new US proxies with location data...")
         
         new_proxies = []
         
@@ -95,20 +173,30 @@ class ProxyManager:
         # Source 3: ProxyScrape
         new_proxies.extend(await self._scrape_proxyscrape())
         
-        # Add new proxies to working list (if not already there)
+        print(f"   📊 Found {len(new_proxies)} potential US proxies")
+        
+        # Enrich with GeoIP data
+        enriched_count = 0
         for proxy in new_proxies:
             if proxy['server'] not in [p['server'] for p in self.working_proxies]:
                 if proxy['server'] not in self.failed_proxies:
-                    self.working_proxies.append(proxy)
+                    # Enrich with GeoIP
+                    enriched = self._enrich_proxy_with_geoip(proxy)
+                    # Only add if it's confirmed US
+                    if enriched['country'] == 'US':
+                        self.working_proxies.append(enriched)
+                        enriched_count += 1
         
-        # Limit cache size to 2000 proxies
-        if len(self.working_proxies) > 2000:
-            self.working_proxies = self.working_proxies[-2000:]
+        print(f"   ✅ Added {enriched_count} new verified US proxies with location data")
+        
+        # Limit cache size to 1000 proxies
+        if len(self.working_proxies) > 1000:
+            self.working_proxies = self.working_proxies[-1000:]
         
         self.last_refresh = datetime.now()
         self._save_cache()
         
-        print(f"   ✅ Total working proxies: {len(self.working_proxies)}")
+        print(f"   💾 Total working proxies in cache: {len(self.working_proxies)}")
     
     async def _scrape_us_proxy_org(self) -> List[Dict]:
         """Scrape US-Proxy.org"""
@@ -120,7 +208,7 @@ class ProxyManager:
                 soup = BeautifulSoup(response.content, 'html.parser')
                 table = soup.find('table', {'class': 'table'})
                 if table:
-                    for row in table.find_all('tr')[1:50]:
+                    for row in table.find_all('tr')[1:100]:
                         cols = row.find_all('td')
                         if len(cols) >= 7:
                             ip = cols[0].text.strip()
@@ -130,11 +218,11 @@ class ProxyManager:
                                 proxies.append({
                                     'server': f'http://{ip}:{port}',
                                     'ip': ip,
-                                    'country': 'US',
-                                    'timezone': 'America/New_York'
+                                    'country': 'US'
                                 })
-        except:
-            pass
+            print(f"      ✓ us-proxy.org: {len(proxies)} proxies")
+        except Exception as e:
+            print(f"      ✗ us-proxy.org failed: {e}")
         return proxies
     
     async def _scrape_free_proxy_list(self) -> List[Dict]:
@@ -147,7 +235,7 @@ class ProxyManager:
                 soup = BeautifulSoup(response.content, 'html.parser')
                 table = soup.find('table', {'class': 'table'})
                 if table:
-                    for row in table.find_all('tr')[1:50]:
+                    for row in table.find_all('tr')[1:100]:
                         cols = row.find_all('td')
                         if len(cols) >= 7:
                             ip = cols[0].text.strip()
@@ -158,11 +246,11 @@ class ProxyManager:
                                 proxies.append({
                                     'server': f'http://{ip}:{port}',
                                     'ip': ip,
-                                    'country': 'US',
-                                    'timezone': 'America/New_York'
+                                    'country': 'US'
                                 })
-        except:
-            pass
+            print(f"      ✓ free-proxy-list: {len(proxies)} proxies")
+        except Exception as e:
+            print(f"      ✗ free-proxy-list failed: {e}")
         return proxies
     
     async def _scrape_proxyscrape(self) -> List[Dict]:
@@ -180,11 +268,11 @@ class ProxyManager:
                             proxies.append({
                                 'server': f'http://{ip}:{port}',
                                 'ip': ip,
-                                'country': 'US',
-                                'timezone': 'America/New_York'
+                                'country': 'US'
                             })
-        except:
-            pass
+            print(f"      ✓ proxyscrape: {len(proxies)} proxies")
+        except Exception as e:
+            print(f"      ✗ proxyscrape failed: {e}")
         return proxies
     
     def mark_proxy_failed(self, proxy_server: str):

@@ -10,15 +10,14 @@ from playwright.async_api import async_playwright
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# Add parent directory to path so we can import config and persona_generator
+# Add parent directory to path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Import from parent directory (Project_Chronos/)
 from persona_generator import PersonaGenerator
 from config import TARGET_URL, BROWSER_CONFIG, TIMING, FORM_SELECTORS, PROXY_CONFIG
 
-# Import from same directory (Browser/)
+# Import from same directory
 from Browser.form_filler import FormFiller
 from Browser.captcha_solver import CaptchaSolver
 from Browser.social_actions import SocialActionsHandler
@@ -49,7 +48,7 @@ class BrowserEngine:
         self.social_handler = SocialActionsHandler()
         self.verifier = SubmissionVerifier()
         
-        # Create directories for error artifacts
+        # Create directories
         Path("screenshots").mkdir(exist_ok=True)
         Path("captcha_images").mkdir(exist_ok=True)
         
@@ -67,7 +66,7 @@ class BrowserEngine:
                 
                 page = await context.new_page()
                 
-                # Test with a simple, fast endpoint
+                # Test with Google
                 await page.goto('https://www.google.com', timeout=15000, wait_until='domcontentloaded')
                 
                 await context.close()
@@ -76,7 +75,6 @@ class BrowserEngine:
                 return True
         
         except Exception as e:
-            print(f"      ⚠️  Proxy test failed: {str(e)[:60]}")
             return False
 
     async def _get_working_proxy(self, proxy_mgr):
@@ -84,7 +82,7 @@ class BrowserEngine:
         Keep trying to get a working proxy until one is found.
         Will refresh proxy list if needed and NEVER return None.
         """
-        max_consecutive_failures = 50  # After 50 failed proxies, refresh the list
+        max_consecutive_failures = 30
         consecutive_failures = 0
         attempt = 0
         
@@ -92,20 +90,35 @@ class BrowserEngine:
             attempt += 1
             
             # Get a candidate proxy
-            candidate_proxy = await proxy_mgr.get_proxy()
-            
-            if not candidate_proxy:
-                print(f"   ⚠️  No more proxies in cache, forcing refresh...")
-                # Force refresh the proxy list
+            try:
+                candidate_proxy = await proxy_mgr.get_proxy()
+            except Exception as e:
+                print(f"   ⚠️  Error getting proxy: {e}")
                 await proxy_mgr._refresh_proxy_list()
                 consecutive_failures = 0
                 continue
             
+            if not candidate_proxy:
+                print(f"   ⚠️  No more proxies in cache, forcing refresh...")
+                await proxy_mgr._refresh_proxy_list()
+                consecutive_failures = 0
+                continue
+            
+            # Ensure proxy has all required fields
+            if not all(k in candidate_proxy for k in ['ip', 'city', 'state', 'country', 'timezone']):
+                print(f"   ⚠️  Proxy missing required fields, skipping...")
+                proxy_mgr.mark_proxy_failed(candidate_proxy['server'])
+                continue
+            
             # Test if proxy works
-            print(f"   🔍 Testing proxy #{attempt}: {candidate_proxy['ip']}...")
+            city = candidate_proxy.get('city', 'Unknown')
+            state = candidate_proxy.get('state', 'Unknown')
+            print(f"   🔍 Testing proxy #{attempt}: {candidate_proxy['ip']} ({city}, {state})...")
             
             if await self._test_proxy(candidate_proxy):
                 print(f"   ✅ Proxy validated after {attempt} attempts!")
+                print(f"   📍 Location: {city}, {state}")
+                print(f"   🕐 Timezone: {candidate_proxy.get('timezone', 'Unknown')}")
                 return candidate_proxy
             else:
                 print(f"   ❌ Proxy failed, trying next...")
@@ -138,12 +151,24 @@ class BrowserEngine:
         proxy_mgr = ProxyManager()
         fingerprint_mgr = FingerprintManager()
         
-        # Get a working proxy - will NEVER return None
-        print(f"   🌐 Finding working proxy...")
-        proxy = await self._get_working_proxy(proxy_mgr)
+        # Get a working proxy
+        print(f"   🌐 Finding working proxy with location data...")
+        try:
+            proxy = await self._get_working_proxy(proxy_mgr)
+        except Exception as e:
+            print(f"   ❌ CRITICAL: Could not find any working proxy: {e}")
+            return False, None
         
-        print(f"   ✅ Using proxy: {proxy['ip']} ({proxy['city']}, {proxy['country']})")
-        fingerprint = fingerprint_mgr.generate_fingerprint(timezone=proxy['timezone'])
+        # Display proxy info nicely
+        city = proxy.get('city', 'Unknown')
+        state = proxy.get('state', 'Unknown')
+        isp = proxy.get('isp', 'Unknown')
+        
+        print(f"   ✅ Using proxy: {proxy['ip']}")
+        print(f"   📍 Location: {city}, {state}")
+        print(f"   🏢 ISP: {isp}")
+        
+        fingerprint = fingerprint_mgr.generate_fingerprint(timezone=proxy.get('timezone'))
         
         print(f"   🎭 Fingerprint: {fingerprint['browser_type'].title()} on {fingerprint['platform']}")
         print(f"   🕐 Timezone: {fingerprint['timezone']}")
@@ -158,7 +183,7 @@ class BrowserEngine:
             await self._log_proxy_info(log_id, proxy)
         else:
             log_id = "TEST_MODE"
-            print(f"   Test Mode: Skipping database log")
+            print(f"   🧪 Test Mode: Skipping database log")
     
         # Step 4: Launch browser with stealth
         try:
@@ -225,14 +250,12 @@ class BrowserEngine:
                         key: (index) => null
                     };
                     
-                    // Replace localStorage with fake version that does nothing
                     Object.defineProperty(window, 'localStorage', {
                         value: fakeStorage,
                         writable: false,
                         configurable: false
                     });
                     
-                    // Replace sessionStorage too
                     Object.defineProperty(window, 'sessionStorage', {
                         value: fakeStorage,
                         writable: false,
@@ -253,17 +276,14 @@ class BrowserEngine:
                 # Wait for page to fully load
                 await asyncio.sleep(random.uniform(2, 3))
 
-                # Verify localStorage is actually blocked
+                # Verify localStorage is blocked
                 print(f"   🔍 Verifying storage is disabled...")
                 try:
                     storage_check = await page.evaluate("""
                         () => {
                             try {
-                                // Try to write
                                 localStorage.setItem('test', 'value');
                                 const hasTest = localStorage.getItem('test') !== null;
-                                
-                                // Check for comp flag
                                 const hasFlag = localStorage.getItem('comp_388') !== null;
                                 
                                 return {
@@ -283,17 +303,16 @@ class BrowserEngine:
                     
                     if storage_check.get('hasCompFlag'):
                         print(f"   ❌ CRITICAL: comp_388 flag detected! Storage override failed!")
-                        print(f"   📊 Storage state: {storage_check}")
                         raise Exception("Storage persistence detected - cannot proceed")
                     
                     if storage_check.get('canWrite'):
-                        print(f"   ⚠️  WARNING: localStorage is still writable! Check: {storage_check}")
+                        print(f"   ⚠️  WARNING: localStorage is still writable!")
                     else:
-                        print(f"   ✅ Storage successfully disabled - comp_388 flag cannot be set")
+                        print(f"   ✅ Storage successfully disabled")
                         
                 except Exception as e:
                     if "Storage persistence detected" in str(e):
-                        raise  # Re-raise critical errors
+                        raise
                     print(f"   ⚠️  Storage verification error: {e}")
            
                 # Open the form
@@ -321,12 +340,12 @@ class BrowserEngine:
                 print(f"   🎯 Completing social actions...")
                 await self.social_handler.handle_actions(page)
 
-                # Verify CAPTCHA is still valid after social actions
+                # Verify CAPTCHA is still valid
                 print(f"   🔍 Verifying CAPTCHA still valid...")
                 captcha_still_valid = await self._verify_captcha_filled(page)
                 
                 if not captcha_still_valid:
-                    print(f"   ⚠️  CAPTCHA cleared after social actions, re-solving...")
+                    print(f"   ⚠️  CAPTCHA cleared, re-solving...")
                     captcha_solved = await self.captcha_solver.solve(page, log_id)
                     
                     if not captcha_solved:
@@ -363,17 +382,17 @@ class BrowserEngine:
                 
         except Exception as e:
             print(f"   ❌ CRITICAL ERROR: {str(e)}")
-            return await self._handle_exception(page, log_id, e)
+            return await self._handle_exception(page if 'page' in locals() else None, log_id, e)
 
     async def _log_proxy_info(self, log_id: str, proxy: dict):
         """Log proxy information to database"""
         try:
             self.supabase.table('attempt_logs').update({
-                'proxy_ip': proxy['ip'],
-                'proxy_city': proxy.get('city'),
-                'proxy_state': proxy.get('country'),
-                'proxy_isp': proxy.get('isp'),
-                'proxy_timezone': proxy.get('timezone')
+                'proxy_ip': proxy.get('ip'),
+                'proxy_city': proxy.get('city', 'Unknown'),
+                'proxy_state': proxy.get('state', 'Unknown'),
+                'proxy_isp': proxy.get('isp', 'Unknown'),
+                'proxy_timezone': proxy.get('timezone', 'America/New_York')
             }).eq('id', log_id).execute()
         except Exception as e:
             print(f"      ⚠️  Failed to log proxy info: {e}")
@@ -386,8 +405,8 @@ class BrowserEngine:
         else:
             print(f"🎭 NEW ATTEMPT STARTING")
         print(f"{'='*70}")
-        print(f"   Name: {name}")
-        print(f"   Email: {email}")
+        print(f"   👤 Name: {name}")
+        print(f"   📧 Email: {email}")
     
     async def _open_form(self, page):
         """Click Start button to reveal form"""
@@ -452,7 +471,7 @@ class BrowserEngine:
         """Handle test mode completion"""
         print(f"\n   🧪 TEST MODE: Stopping before submission")
         print(f"   ✅ Form filled and ready to submit")
-        print(f"   👀 Browser will stay open for 30 seconds for you to inspect")
+        print(f"   👀 Browser will stay open for 30 seconds for inspection")
         
         await asyncio.sleep(30)
         
@@ -465,11 +484,14 @@ class BrowserEngine:
     async def _handle_exception(self, page, log_id, exception):
         """Handle critical exceptions"""
         try:
-            screenshot = await self.screenshot_manager.capture(page, log_id)
+            if page:
+                screenshot = await self.screenshot_manager.capture(page, log_id)
+            else:
+                screenshot = None
         except:
             screenshot = None
         
-        if not self.test_mode:
+        if not self.test_mode and log_id and log_id != "TEST_MODE":
             await self.db_logger.log_failure(
                 log_id,
                 f"EXCEPTION: {str(exception)}",
